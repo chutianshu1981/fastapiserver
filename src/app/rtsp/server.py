@@ -74,20 +74,20 @@ class RtspServer:
         logger.debug(f"播放端点管道: {pipeline}")
         return pipeline
 
-    def _create_push_pipeline(self) -> str:
-        """创建推流端点的 GStreamer pipeline
+    # def _create_push_pipeline(self) -> str:
+    #     """创建推流端点的 GStreamer pipeline
 
-        Returns:
-            str: Pipeline 描述字符串
-        """
-        # 使用 rtspsrc 接收 RTP 流 (User's new proposal)
-        logger.info("创建推流端点管道 (rtspsrc ! rtph264depay ! ...)")
-        pipeline = (
-            "rtspsrc name=source protocols=GST_RTSP_LOWER_TRANS_UDP "
-            "! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! autovideosink"
-        )
-        logger.debug(f"推流端点管道: {pipeline}")
-        return pipeline
+    #     Returns:
+    #         str: Pipeline 描述字符串
+    #     """
+    #     # 使用 rtspsrc 接收 RTP 流 (User's new proposal)
+    #     logger.info("创建推流端点管道 (rtspsrc ! rtph264depay ! ...)")
+    #     pipeline = (
+    #         "rtspsrc name=source protocols=GST_RTSP_LOWER_TRANS_UDP "
+    #         "! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! autovideosink"
+    #     )
+    #     logger.debug(f"推流端点管道: {pipeline}")
+    #     return pipeline
 
     def _setup_media_factories(self) -> None:
         """配置 RTSP MediaFactory"""
@@ -113,8 +113,8 @@ class RtspServer:
             raise RuntimeError("无法创建推流端点 RTSPMediaFactory")
 
         # 配置推流端点
-        push_pipeline = self._create_push_pipeline()
-        self.push_factory.set_launch(push_pipeline)  # 恢复 set_launch
+        # push_pipeline = self._create_push_pipeline() # Commented out as per recommendation
+        # self.push_factory.set_launch(push_pipeline)  # Commented out as per recommendation
         # self.push_factory.set_media_type(GstRtspServer.RTSPMediaType.APPLICATION)  # REMOVED due to AttributeError - User wants this, but it causes error.
         self.push_factory.set_transport_mode(
             # Changed to RECORD as per user's latest feedback
@@ -178,16 +178,16 @@ class RtspServer:
                                  media: GstRtspServer.RTSPMedia) -> None:
         """推流端点媒体配置回调"""
         logger.info("开始配置推流端点媒体")
-        element = media.get_element()
+        # element = media.get_element() # We might still need the element for _configure_media
 
         # 获取 source 元素并配置 (source is the rtspsrc element)
-        source = element.get_by_name("source")
-        if source:
-            logger.info("配置 rtspsrc 元素 (source)")
-            source.set_property("latency", 200)
-            source.set_property("drop-on-latency", True)
-        else:
-            logger.warning("在推流管道中未找到名为 'source' 的 rtspsrc 元素")
+        # source = element.get_by_name("source")
+        # if source:
+        #     logger.info("配置 rtspsrc 元素 (source)")
+        #     source.set_property("latency", 200)
+        #     source.set_property("drop-on-latency", True)
+        # else:
+        #     logger.warning("在推流管道中未找到名为 'source' 的 rtspsrc 元素")
 
         # 调用基础配置
         self._configure_media(media, "推流端点")
@@ -213,7 +213,7 @@ class RtspServer:
 
         # 直接使用媒体对象的状态管理
         logger.info(f"尝试为 {endpoint} 设置媒体状态为 PLAYING")
-        result = media.set_state(Gst.State.PLAYING)  # 使用 media.set_state
+        result = media.set_state(Gst.State.PLAYING, Gst.CLOCK_TIME_NONE)  # 使用 media.set_state
         if result == Gst.StateChangeReturn.FAILURE:
             logger.error(f"{endpoint}设置PLAYING状态失败")
             return
@@ -299,8 +299,10 @@ class RtspServer:
             # 启动服务器
             self.server.attach(None)
             logger.info(
-                f"RTSP 服务器启动:\n"
-                f"- 播放地址: rtsp://0.0.0.0:{self.settings.RTSP_PORT}/live\n"
+                f"RTSP 服务器启动:
+"
+                f"- 播放地址: rtsp://0.0.0.0:{self.settings.RTSP_PORT}/live
+"
                 f"- 推流地址: rtsp://0.0.0.0:{self.settings.RTSP_PORT}/push"
             )
 
