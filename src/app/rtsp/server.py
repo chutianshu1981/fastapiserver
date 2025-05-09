@@ -120,7 +120,8 @@ class RtspServer:
         self.push_factory.set_transport_mode(
             # Changed to RECORD as per user's latest feedback
             GstRtspServer.RTSPTransportMode.RECORD)
-        self.push_factory.set_shared(False) # Important for RECORD mode, each client gets its own media instance
+        # Important for RECORD mode, each client gets its own media instance
+        self.push_factory.set_shared(False)
         self.push_factory.set_latency(0)
         self.push_factory.set_eos_shutdown(False)
 
@@ -220,7 +221,8 @@ class RtspServer:
         else:
             logger.info(f"{endpoint}媒体状态设置请求结果: {result.value_nick}")
 
-        _ret_state, current_state, _pending_state = element.get_state(Gst.SECOND / 4) # Short timeout
+        _ret_state, current_state, _pending_state = element.get_state(
+            Gst.SECOND / 4)  # Short timeout
         logger.info(
             f"{endpoint}媒体管道当前状态 (after set_state call): {current_state.value_nick if _ret_state == Gst.StateChangeReturn.SUCCESS else '未知'}")
 
@@ -247,11 +249,13 @@ class RtspServer:
         t = message.type
         if t == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
-            logger.error(f"GStreamer错误 from {message.src.get_path_string() if message.src else 'Unknown Source'}: {err.message}")
+            logger.error(
+                f"GStreamer错误 from {message.src.get_path_string() if message.src else 'Unknown Source'}: {err.message}")
             logger.debug(f"调试信息: {debug}")
         elif t == Gst.MessageType.WARNING:
             warn, debug = message.parse_warning()
-            logger.warning(f"GStreamer警告 from {message.src.get_path_string() if message.src else 'Unknown Source'}: {warn.message}")
+            logger.warning(
+                f"GStreamer警告 from {message.src.get_path_string() if message.src else 'Unknown Source'}: {warn.message}")
             logger.debug(f"调试信息: {debug}")
         elif t == Gst.MessageType.STATE_CHANGED:
             if message.src and isinstance(message.src, Gst.Element):
@@ -262,7 +266,8 @@ class RtspServer:
             else:
                 logger.info("状态变化 on non-element source")
         elif t == Gst.MessageType.EOS:
-            logger.info(f"收到流结束信号 from {message.src.get_path_string() if message.src else 'Unknown Source'}")
+            logger.info(
+                f"收到流结束信号 from {message.src.get_path_string() if message.src else 'Unknown Source'}")
 
     def start(self) -> None:
         """启动 RTSP 服务器"""
@@ -271,7 +276,8 @@ class RtspServer:
             return
 
         try:
-            self.server = cast(GstRtspServer.RTSPServer, GstRtspServer.RTSPServer.new())
+            self.server = cast(GstRtspServer.RTSPServer,
+                               GstRtspServer.RTSPServer.new())
             if self.server is None:
                 raise RuntimeError("无法创建 RTSP 服务器")
 
@@ -281,16 +287,16 @@ class RtspServer:
             if mount_points is None:
                 raise RuntimeError("无法获取挂载点")
 
-            mount_points.add_factory("/live", cast(GstRtspServer.RTSPMediaFactory, self.play_factory))
-            mount_points.add_factory("/push", cast(GstRtspServer.RTSPMediaFactory, self.push_factory))
+            mount_points.add_factory(
+                "/live", cast(GstRtspServer.RTSPMediaFactory, self.play_factory))
+            mount_points.add_factory(
+                "/push", cast(GstRtspServer.RTSPMediaFactory, self.push_factory))
             self.server.connect('client-connected', self._on_client_connected)
             self.server.attach(None)
             logger.info(
-                f"RTSP 服务器启动:
-"
-                f"- 播放地址: rtsp://0.0.0.0:{self.settings.RTSP_PORT}/live
-"
-                f"- 推流地址: rtsp://0.0.0.0:{self.settings.RTSP_PORT}/push"
+                f"RTSP 服务器启动:\n"
+                f"- 播放地址: rtsp://0.0.0.0:{self.settings.RTSP_PORT}/live\n"
+                f"- 推流地址: rtsp://0.0.0.0:{self.settings.RTSP_PORT}/push\n"
             )
 
             self._running = True
@@ -298,7 +304,8 @@ class RtspServer:
             if self.mainloop is None:
                 raise RuntimeError("无法创建主循环")
 
-            self._mainloop_thread = threading.Thread(target=self.mainloop.run, daemon=True)
+            self._mainloop_thread = threading.Thread(
+                target=self.mainloop.run, daemon=True)
             self._mainloop_thread.start()
             time.sleep(1)
 
@@ -314,25 +321,26 @@ class RtspServer:
 
         try:
             with self._lock:
-                for client_id in list(self._clients.keys()): # Iterate over a copy of keys
+                # Iterate over a copy of keys
+                for client_id in list(self._clients.keys()):
                     client = self._clients.pop(client_id, None)
                     # client.finalize() # This might be too aggressive or cause issues if client is already closing
                     logger.info(f"清理客户端: {client_id}")
 
             if self.mainloop and self.mainloop.is_running():
                 self.mainloop.quit()
-            
+
             # Wait for mainloop thread to finish if it was started
             if hasattr(self, '_mainloop_thread') and self._mainloop_thread.is_alive():
-                self._mainloop_thread.join(timeout=2) # Wait for 2 seconds
+                self._mainloop_thread.join(timeout=2)  # Wait for 2 seconds
                 if self._mainloop_thread.is_alive():
                     logger.warning("Mainloop thread did not exit gracefully.")
-            
+
             # Detach server from context to release resources
             if self.server:
-                 self.server.detach()
-                 # According to some GStreamer docs/examples, setting server to None might help with cleanup
-                 # self.server = None 
+                self.server.detach()
+                # According to some GStreamer docs/examples, setting server to None might help with cleanup
+                # self.server = None
 
             self._running = False
             logger.info("RTSP 服务器已停止")
