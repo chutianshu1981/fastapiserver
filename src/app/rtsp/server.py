@@ -299,10 +299,8 @@ class RtspServer:
             # 启动服务器
             self.server.attach(None)
             logger.info(
-                f"RTSP 服务器启动:
-"
-                f"- 播放地址: rtsp://0.0.0.0:{self.settings.RTSP_PORT}/live
-"
+                f"RTSP 服务器启动:\n"
+                f"- 播放地址: rtsp://0.0.0.0:{self.settings.RTSP_PORT}/live"
                 f"- 推流地址: rtsp://0.0.0.0:{self.settings.RTSP_PORT}/push"
             )
 
