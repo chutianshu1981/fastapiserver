@@ -1,0 +1,12 @@
+{
+    "mcpServers": {
+        "context7": {
+            "command": "/home/chutianshu/.nvm/versions/node/v22.15.0/bin/npx",
+            "args": [
+                "@upstash/context7-mcp@latest",
+                "start"
+            ],
+            "type": "stdio"
+        }
+    }
+}

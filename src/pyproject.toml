@@ -1,0 +1,144 @@
+ [project]
+name = "rtsp-receiver-service"
+version = "0.1.0"
+description = "safepath fastapi server - RTSP Video Stream Receiver Service"
+authors = [
+    {name = "SafePath Team", email = "team@example.com"},
+    {name = "chutianshu", email = "chutianshu_1981@126.com"},
+]
+dependencies = [
+    "fastapi[standard]>=0.115.0,<0.116.0",  # 包含 uvicorn, pydantic 等
+    "uvicorn[standard]>=0.34.0,<0.35.0",    # 明确指定以获取标准性能库
+    "pydantic>=2.11.0,<3.0.0",
+    "opencv-python>=4.11.0,<4.12.0",      # 或 opencv-python-headless
+    "python-dotenv>=1.0.0",
+    "pydantic-settings>=2.9.1",
+    # 新增依赖
+    "python-multipart>=0.0.9",           # 用于处理表单数据和文件上传
+    "aiofiles>=23.2.1",                  # 用于异步文件操作
+    "typing-extensions>=4.12.0",         # 增强类型提示功能
+    # 生产环境可能需要的依赖
+    "gunicorn>=22.0.0",                  # 生产环境 WSGI 服务器
+    "uvloop>=0.19.0",                    # 提高 uvicorn 性能
+    "httptools>=0.6.1",                  # 提高 uvicorn 性能
+    # PyGObject 和 GStreamer 通过系统包安装，不在此列出
+    # "pycairo>=1.28.0",                 # 通过系统包安装: sudo apt install python3-gi-cairo
+    # "PyGObject>=3.52.3"                # 通过系统包安装: sudo apt install python3-gi
+    "psutil>=7.0.0",
+    "slowapi>=0.1.9"
+]
+requires-python = ">=3.12,<3.13"  # 升级到 Python 3.12
+readme = "README.md"
+license = {text = "MIT"}
+
+# 系统级依赖说明（这不会被 PDM 处理，仅作为文档说明）
+[project.system-dependencies]
+description = """
+本项目依赖以下系统级包，需要通过系统包管理器（如 apt）安装：
+- GStreamer 1.22+: sudo apt install gstreamer1.0-plugins-{base,good,bad,ugly} gstreamer1.0-tools gstreamer1.0-rtsp
+- PyGObject: sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 libgirepository1.0-dev
+- 开发依赖: sudo apt install gcc libcairo2-dev pkg-config python3-dev gir1.2-gstreamer-1.0
+
+注意：在 PDM 虚拟环境中使用 PyGObject 和 GStreamer，需要创建支持系统站点包的虚拟环境：
+pdm venv --system-site-packages
+"""
+
+[project.optional-dependencies]
+# 开发环境依赖，用于日常开发
+dev = [
+    "ipython>=8.26.0",
+    "debugpy>=1.8.1",
+    "pytest>=8.3.5",
+    "httpx>=0.28.1",
+    "pytest-asyncio>=0.26.0",
+    "pytest-cov>=6.1.1",
+    "pytest-mock>=3.14.0",               # 用于模拟外部依赖
+    "black>=25.1.0",
+    "mypy>=1.15.0",
+    "flake8>=7.0.0",
+    "isort>=5.13.0",
+]
+
+# 添加部署依赖分组
+deploy = [
+    "gunicorn>=22.0.0",
+    "uvloop>=0.19.0",
+    "httptools>=0.6.1",
+]
+
+# 添加可选的性能优化依赖
+performance = [
+    "orjson>=3.10.0",                    # 更快的 JSON 序列化/反序列化
+    "ujson>=5.10.0",                     # 另一个快速 JSON 库
+]
+
+# 系统集成依赖说明
+system-integration = [
+    # 这些包通常通过系统包管理器安装，不是通过 pip/pdm
+    # "pygobject",                       # Python 绑定到 GObject
+    # "gstreamer-1.0"                    # GStreamer 库
+]
+
+# 文档生成依赖
+docs = [
+    "sphinx>=7.3.7",
+    "sphinx-rtd-theme>=2.0.0",
+]
+
+# 组合依赖，方便一次性安装所有开发相关的包
+all-dev = [
+    "ipython>=8.26.0",
+    "debugpy>=1.8.1",
+    "pytest>=8.3.5",
+    "httpx>=0.28.1",
+    "pytest-asyncio>=0.26.0",
+    "pytest-cov>=6.1.1",
+    "pytest-mock>=3.14.0",
+    "black>=25.1.0",
+    "mypy>=1.15.0",
+    "isort>=5.13.0",
+    "sphinx>=7.3.7",
+    "sphinx-rtd-theme>=2.0.0"
+]
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]  # 升级到 Python 3.12
+
+[tool.mypy]
+python_version = "3.12"  # 升级到 Python 3.12
+strict = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.pdm]
+distribution = true
+[tool.pdm.tool-options]
+use_uv = true  # 使用 uv 加速
+
+# 明确指定包的源码布局，避免创建额外的 src 目录
+[tool.pdm.build]
+package-dir = "."    # 指定源代码就在当前目录下，而不是在 src/ 子目录
+packages = ["app"]   # 明确指定包含的包（app 是实际包目录）
+# 确保构建时不包含开发依赖
+excludes = ["tests", "__pycache__"]
+
+# 添加工具配置
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = "E203"
+exclude = [".git", "__pycache__", ".venv", "venv", ".eggs", "*.egg"]
