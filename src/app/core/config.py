@@ -30,9 +30,20 @@ class Settings(BaseSettings):
 
     # RTSP 服务器配置
     RTSP_PORT: int = Field(default=8554, description="RTSP 服务器监听端口")  # 改为非特权端口
-    RTSP_PATH: str = Field(default="/live", description="RTSP 媒体路径")
+    # Changed from /live to /push
+    RTSP_PATH: str = Field(default="/push", description="RTSP 媒体路径")
     OUTPUT_DIR: Path = Field(default=BASE_DIR / "videos", description="视频输出目录")
     MAX_VIDEO_STORAGE_DAYS: int = Field(default=1, description="视频文件最大存储天数")
+
+    # Roboflow AI 配置
+    ROBOFLOW_API_KEY: str = Field(
+        default="vQBqeX1kgPouPr8aWDd5", description="Roboflow API Key")
+    ROBOFLOW_MODEL_ID: str = Field(
+        default="next-level-i0lpn/3", description="Roboflow 模型 ID")
+    ROBOFLOW_CONFIDENCE_THRESHOLD: float = Field(
+        default=0.5, description="Roboflow 推理置信度阈值")
+    ROBOFLOW_TARGET_CLASS_NAME: str = Field(
+        default="blind-lane", description="Roboflow 目标检测类别名称")
 
     # 日志配置
     LOG_LEVEL: str = Field(default="INFO", description="日志级别")

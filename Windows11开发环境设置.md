@@ -232,4 +232,8 @@
 
 ``` sh
 gst-launch-1.0 playbin uri=rtsp://192.168.31.102:8554/live
+
+ eval $(pdm venv activate)    
 ```
+
+https://inference.roboflow.com/using_inference/inference_pipeline/#migrate-to-changes-introduced-in-v0918

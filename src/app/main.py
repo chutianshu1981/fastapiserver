@@ -15,6 +15,8 @@ import logging
 import asyncio
 import signal
 import os
+import json  # For logging AI predictions
+from typing import Dict, Any, Optional  # For type hinting
 
 # 导入 GStreamer (确保来自系统安装)
 try:
@@ -30,9 +32,9 @@ except (ImportError, ValueError) as e:
 
 from .api.routes import router as api_router, setup_app
 from .rtsp.server import RtspServer
-from .services.video_service import VideoService
 from .core.config import get_settings
 from .core.logger import setup_logging
+from .services.ai_processor import AIProcessor  # Import AIProcessor
 
 # 配置日志
 logger = setup_logging()
@@ -49,6 +51,9 @@ mainloop = GLib.MainLoop()
 # 全局变量
 rtsp_thread = None
 periodic_task = None
+rtsp_server: Optional[RtspServer] = None  # Add type hint
+ai_processor: Optional[AIProcessor] = None
+ai_processor_task: Optional[asyncio.Task] = None
 
 
 # 获取服务器IP地址
@@ -116,54 +121,133 @@ async def periodic_tasks():
 # 优雅关闭处理
 async def shutdown_event():
     logger.info("收到关闭信号，开始优雅关闭...")
+    global ai_processor, ai_processor_task  # Ensure globals are referenced
+
+    # 停止 GStreamer 主循环
     if mainloop.is_running():
         logger.info("正在停止主循环...")
         mainloop.quit()
+
     # 等待服务器线程结束 (如果需要)
     if rtsp_thread and rtsp_thread.is_alive():
         logger.info("等待服务器线程退出...")
         rtsp_thread.join(timeout=5)  # 等待最多 5 秒
         if rtsp_thread.is_alive():
             logger.warning("服务器线程未在超时内退出。")
+
+    # 停止 AI 处理器
+    if ai_processor:
+        logger.info("正在停止 AIProcessor...")
+        try:
+            await ai_processor.stop()
+            logger.info("AIProcessor 已停止。")
+        except Exception as e:
+            logger.error(f"停止 AIProcessor 时出错: {e}", exc_info=True)
+
+    # 取消 AI 处理器任务
+    if ai_processor_task:
+        if not ai_processor_task.done():
+            logger.info("正在取消 AIProcessor 任务...")
+            ai_processor_task.cancel()
+            try:
+                await ai_processor_task
+            except asyncio.CancelledError:
+                logger.info("AIProcessor 任务已成功取消。")
+            except Exception as e:
+                logger.error(f"AIProcessor 任务在取消期间/之后引发异常: {e}", exc_info=True)
+        else:
+            logger.info("AIProcessor 任务已完成。")
+            if ai_processor_task.exception():
+                logger.error(
+                    f"AIProcessor 任务以异常结束: {ai_processor_task.exception()}", exc_info=ai_processor_task.exception())
+
     # 取消定期任务
     if periodic_task:
-        logger.info("正在取消定期任务...")
-        periodic_task.cancel()
-        try:
-            await periodic_task
-        except asyncio.CancelledError:
-            logger.info("定期任务已取消。")
-    logger.info("关闭完成。")
+        if not periodic_task.done():
+            logger.info("正在取消定期任务...")
+            periodic_task.cancel()
+            try:
+                await periodic_task
+            except asyncio.CancelledError:
+                logger.info("定期任务已成功取消。")
+            except Exception as e:
+                logger.error(f"定期任务在取消期间/之后引发异常: {e}", exc_info=True)
+        else:
+            logger.info("定期任务已完成。")
+            if periodic_task.exception():
+                logger.error(
+                    f"定期任务以异常结束: {periodic_task.exception()}", exc_info=periodic_task.exception())
+
+    logger.info("优雅关闭完成。")
+
+
+# 定义 AI 预测处理函数
+async def handle_ai_prediction(prediction_data: Dict[str, Any]):
+    """
+    处理 AIProcessor 预测结果的回调函数。
+    当前记录预测结果。稍后可以将数据发送给客户端。
+    """
+    logger.info(
+        f"收到 AI 预测结果: {json.dumps(prediction_data, indent=2, ensure_ascii=False)}")
+    # TODO: 实现将数据发送给连接的客户端的逻辑（例如，通过 WebSocket）
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
-    global rtsp_thread, periodic_task
+    global rtsp_thread, periodic_task, rtsp_server, ai_processor, ai_processor_task
     # 启动
     logger.info("应用启动，正在初始化...")
     os.makedirs(settings.OUTPUT_DIR, exist_ok=True)
 
-    # 在单独线程中启动主循环和RTSP服务器
-    logger.info("正在启动RTSP服务器线程...")
+    # 初始化 RTSP 服务器实例
+    logger.info("Initializing RTSPServer...")
+    rtsp_server = RtspServer()  # Corrected: No arguments passed to constructor
+    logger.info("RTSPServer instance created.")
+    # 注意: rtsp_server.start() 在 run_rtsp_server_loop 中调用
+
+    logger.info("正在启动 RTSP 服务器线程...")
     rtsp_thread = threading.Thread(target=run_rtsp_server_loop, daemon=True)
     rtsp_thread.start()
-    logger.info("RTSP服务器线程已启动")
+    logger.info("RTSP 服务器线程已启动")
+
+    # 允许 RTSP 服务器启动前 AI 连接的时间
+    await asyncio.sleep(2)  # 短暂延迟
+
+    # 初始化并启动 AIProcessor
+    rtsp_stream_url_for_ai = f"rtsp://127.0.0.1:{settings.RTSP_PORT}{settings.RTSP_PATH}"
+    logger.info(f"使用 RTSP URL 初始化 AIProcessor: {rtsp_stream_url_for_ai}")
+
+    try:
+        ai_processor = AIProcessor(
+            rtsp_url=rtsp_stream_url_for_ai,
+            on_prediction_callback=handle_ai_prediction
+        )
+        logger.info("AIProcessor 实例已创建。正在启动 AI 处理任务...")
+        ai_processor_task = asyncio.create_task(ai_processor.start())
+        logger.info("AIProcessor 任务已创建并开始后台处理。")
+    except Exception as e:
+        logger.error(f"初始化或启动 AIProcessor 失败: {e}", exc_info=True)
+        ai_processor = None
+        ai_processor_task = None
 
     # 启动定期任务
     periodic_task = asyncio.create_task(periodic_tasks())
+    logger.info("定期任务已启动。")
     logger.info("应用启动完成。")
 
-    # 向控制台输出服务器信息
     server_ip = get_server_ip()
     logger.info(
-        f"RTSP服务器地址: rtsp://{server_ip}:{settings.RTSP_PORT}{settings.RTSP_PATH}")
-    logger.info(f"请在Android设备上配置以上地址进行测试")
+        f"RTSP 服务器地址: rtsp://{server_ip}:{settings.RTSP_PORT}{settings.RTSP_PATH}")
+    logger.info(f"FastAPI 服务器运行在: http://{server_ip}:{settings.API_PORT}")
+    logger.info("请在 Android 设备上配置 RTSP 服务器地址进行测试。")
 
     yield  # 应用运行中
 
     # 关闭
+    logger.info("应用关闭: 开始清理...")
     await shutdown_event()
+    logger.info("应用关闭完成。")
 
 
 # 创建应用实例
@@ -173,14 +257,10 @@ app = FastAPI(
     debug=True  # 启用调试模式
 )
 
-# 在这里添加一个简单的测试路由，确保 FastAPI 正在运行
-
 
 @app.get("/")
 async def root():
     return {"message": "RTSP服务器正在运行", "status": "OK"}
-
-# 添加另一个测试路由来检查RTSP服务器状态
 
 
 @app.get("/rtsp-status")
@@ -203,12 +283,3 @@ app.add_middleware(
 
 # 配置应用
 setup_app(app)
-
-# 实例化服务 (全局实例，注意线程安全和状态管理)
-rtsp_server = RtspServer()
-
-# 暂时不启用视频服务，只测试 RTSP 接收功能
-# video_service = VideoService(
-#     output_dir=settings.OUTPUT_DIR,
-#     max_storage_days=settings.MAX_VIDEO_STORAGE_DAYS
-# )

@@ -1,4 +1,4 @@
- [project]
+[project]
 name = "rtsp-receiver-service"
 version = "0.1.0"
 description = "safepath fastapi server - RTSP Video Stream Receiver Service"
@@ -7,12 +7,12 @@ authors = [
     {name = "chutianshu", email = "chutianshu_1981@126.com"},
 ]
 dependencies = [
-    "fastapi[standard]>=0.115.0,<0.116.0",  # 包含 uvicorn, pydantic 等
+    "fastapi[standard]~=0.110.0",  # 修改以兼容 inference
     "uvicorn[standard]>=0.34.0,<0.35.0",    # 明确指定以获取标准性能库
     "pydantic>=2.11.0,<3.0.0",
-    "opencv-python>=4.11.0,<4.12.0",      # 或 opencv-python-headless
+    "opencv-python==4.10.0.84",      # 或 opencv-python-headless
     "python-dotenv>=1.0.0",
-    "pydantic-settings>=2.9.1",
+    "pydantic-settings~=2.7.0",      # 修改以兼容 inference
     # 新增依赖
     "python-multipart>=0.0.9",           # 用于处理表单数据和文件上传
     "aiofiles>=23.2.1",                  # 用于异步文件操作
@@ -25,7 +25,11 @@ dependencies = [
     # "pycairo>=1.28.0",                 # 通过系统包安装: sudo apt install python3-gi-cairo
     # "PyGObject>=3.52.3"                # 通过系统包安装: sudo apt install python3-gi
     "psutil>=7.0.0",
-    "slowapi>=0.1.9"
+    "slowapi>=0.1.9",
+    "numpy~=2.0.0",                 # 修改以兼容 inference==0.49.1
+    "roboflow>=1.1.63",
+    "inference==0.49.1",              # 新增 inference
+    "supervision>=0.25.1"
 ]
 requires-python = ">=3.12,<3.13"  # 升级到 Python 3.12
 readme = "README.md"
