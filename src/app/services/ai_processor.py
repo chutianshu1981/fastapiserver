@@ -2,32 +2,70 @@
 AI 处理模块，使用 Roboflow InferencePipeline 处理 RTSP 视频流
 """
 from app.core.config import get_settings
-from inference import StreamClient  # Updated import path
-# Kept as is, likely correct
-from inference.core.interfaces.camera.entities import VideoFrame
-from inference import get_model
-# Added for type checking and accessing video_frame_param.image properties
-import numpy as np
-import asyncio
-import json
+from inference.core.interfaces.stream.sinks import render_boxes
+from inference.core.interfaces.stream.inference_pipeline import InferencePipeline
+from gi.repository import Gst, GLib, GstApp  # type: ignore
 import os
-from typing import Any, Callable, Coroutine, Dict, Optional, List  # Added List
+import json
+import asyncio
+import numpy as np
+from typing import Any, Callable, Coroutine, Dict, Optional, List, cast
 from loguru import logger
-# Removed 'impor' typo that was here
+import supervision as sv
+import time
+from datetime import datetime
+from collections import defaultdict
+
+# GStreamer imports
+import gi
+gi.require_version('Gst', '1.0')
+gi.require_version('GstApp', '1.0')
+
+# Initialize GStreamer
+Gst.init(None)
 
 settings = get_settings()
+
+# FPS monitoring
+
+
+class FPSCounter:
+    def __init__(self, window_size: int = 30):
+        self.window_size = window_size
+        self.timestamps: List[float] = []
+
+    def tick(self) -> None:
+        current_time = time.time()
+        self.timestamps.append(current_time)
+
+        # Remove timestamps outside the window
+        while self.timestamps and self.timestamps[0] < current_time - self.window_size:
+            self.timestamps.pop(0)
+
+    def get_fps(self) -> float:
+        if len(self.timestamps) < 2:
+            return 0.0
+
+        time_diff = self.timestamps[-1] - self.timestamps[0]
+        if time_diff == 0:
+            return 0.0
+
+        return (len(self.timestamps) - 1) / time_diff
+
+
+# Create FPS counter instance
+fps_counter = FPSCounter()
 
 
 class AIProcessor:
     """
-    封装 Roboflow InferencePipeline，用于处理 RTSP 视频流并进行 AI 分析。
+    封装 Roboflow InferencePipeline，用于处理视频帧并进行 AI 分析。
     """
 
     def __init__(
         self,
         model_id: str,
         rtsp_url: str,
-        # Updated type hint
         on_prediction_callback: Callable[[Dict[str, Any]], Coroutine[Any, Any, None]],
         api_key: Optional[str] = None,
     ):
@@ -35,286 +73,167 @@ class AIProcessor:
         初始化 AIProcessor。
 
         Args:
-            model_id: 模型 ID。
-            rtsp_url: RTSP 视频流地址。
-            on_prediction_callback: 异步回调函数，用于处理每帧的推理结果。
-                                     回调函数接收一个字典参数，包含处理后的推理数据。
-            api_key: API 密钥。
+            model_id: Roboflow 模型 ID
+            rtsp_url: RTSP 视频流地址
+            on_prediction_callback: 异步回调函数，用于处理每帧的推理结果
+            api_key: Roboflow API 密钥
         """
         self.model_id = model_id
         self.rtsp_url = rtsp_url
-        self.api_key = api_key
+        self.api_key = api_key or settings.ROBOFLOW_API_KEY
         self.on_prediction_callback = on_prediction_callback
-        self.stream_client: Optional[StreamClient] = None
-        self.model = None  # Initialize model attribute
+        self.pipeline: Gst.Pipeline | None = None
+        self.inference_pipeline = None
         self.is_running = False
-        # Added loop attribute
-        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.frame_count = 0
 
-        logger.info(
-            f"Initializing AIProcessor with model_id: {model_id}, RTSP URL: {rtsp_url}"
-        )
+        # 初始化 Roboflow
         try:
-            self.model = get_model(
-                model_id=self.model_id, api_key=self.api_key)
-            logger.info(f"Successfully loaded model: {self.model_id}")
+            # 初始化推理管道
+            self.inference_pipeline = InferencePipeline.init(
+                model_id=self.model_id,
+                video_reference=self.rtsp_url,  # 设置视频源
+                api_key=self.api_key,
+                confidence=settings.ROBOFLOW_CONFIDENCE_THRESHOLD,
+                on_prediction=self._on_prediction
+            )
+            logger.info(
+                f"Successfully initialized Roboflow pipeline for model: {self.model_id}")
         except Exception as e:
             logger.error(
-                f"Failed to load model {self.model_id}: {e}", exc_info=True)
-            raise  # Reraise to signal initialization failure clearly
+                f"Failed to initialize Roboflow pipeline: {e}", exc_info=True)
+            raise
 
-    async def start(self):
+    def _on_prediction(self, predictions: Any, video_frame: Any) -> None:
         """
-        启动 AI 处理流程。
+        处理 Roboflow 推理结果的回调函数
+
+        Args:
+            predictions: 模型推理结果
+            video_frame: 视频帧数据
         """
-        if self.is_running:
-            logger.info("AIProcessor is already running.")
-            return
-
-        if not self.model:
-            logger.error("AI model not loaded. Cannot start AIProcessor.")
-            return
-
-        self.loop = asyncio.get_running_loop()  # Capture the event loop
-
-        logger.info(
-            f"Configuring StreamClient for RTSP stream: {self.rtsp_url}")
-
-        self.stream_client = StreamClient(
-            model=self.model,
-            rtsp_url=self.rtsp_url,
-            sinks=[self._custom_on_prediction],  # Pass the method directly
-            max_fps=10,  # As configured previously
-        )
-        # Set is_running before starting the blocking call or background task
-        self.is_running = True
-        logger.info(
-            "StreamClient configured. AIProcessor is now considered 'running' and ready for stream start."
-        )
-
-    async def stop(self):
-        """
-        停止 AI 处理流程。
-        """
-        if not self.is_running:
-            logger.info("AIProcessor is not running.")
-            return
-
-        logger.info("Stopping AIProcessor...")
-        if self.stream_client:
-            try:
-                self.stream_client.stop()
-                logger.info("StreamClient stop signal sent.")
-            except Exception as e:
-                logger.error(
-                    f"Error stopping StreamClient: {e}", exc_info=True)
-
-        self.is_running = False
-        self.stream_client = None  # Release the client
-        logger.info("AIProcessor stopped.")
-
-    def _custom_on_prediction(
-        self, predictions: Any, video_frame: VideoFrame  # Updated signature
-    ) -> None:
-        """
-        Custom callback function to process AI predictions for each frame.
-        `predictions` is the output from model.infer().
-        `video_frame` is `inference.core.interfaces.camera.entities.VideoFrame`.
-        """
-        frame_id_for_log = "unknown"
         try:
-            if hasattr(video_frame, 'frame_id'):
-                frame_id_for_log = video_frame.frame_id
+            self.frame_count += 1
 
-            # model.infer() might return a single prediction object or a list of them.
-            # We typically expect one for a single frame, or the first if it's a list.
-            model_prediction_object: Any
-            if isinstance(predictions, list):
-                if not predictions:
-                    logger.error(
-                        f"Frame {frame_id_for_log}: Received empty list of predictions.")
-                    # Schedule error callback if necessary
-                    if self.loop:
-                        asyncio.run_coroutine_threadsafe(self.on_prediction_callback({
-                            "frame_id": frame_id_for_log,
-                            "error": "Empty prediction list from model."
-                        }), self.loop)
-                    return
-                model_prediction_object = predictions[0]
+            # 处理检测结果
+            detections = []
+            if hasattr(predictions, "predictions"):
+                raw_detections = predictions.predictions
+            elif isinstance(predictions, list):
+                raw_detections = predictions
             else:
-                model_prediction_object = predictions
+                raw_detections = [predictions]
 
-            if not hasattr(model_prediction_object, "model_dump"):
-                logger.error(
-                    f"Frame {frame_id_for_log}: Prediction object (type: {type(model_prediction_object)}) lacks model_dump method."
-                )
-                error_data = {
-                    "frame_id": frame_id_for_log,
-                    "error": "AI prediction object cannot be serialized.",
-                    "details": f"Object type: {type(model_prediction_object)}",
-                }
-                if self.loop:
-                    asyncio.run_coroutine_threadsafe(
-                        self.on_prediction_callback(error_data), self.loop)
-                return
-
-            model_output_dict = model_prediction_object.model_dump(
-                by_alias=True, exclude_none=True
-            )
-
-            if not isinstance(model_output_dict, dict):
-                logger.error(
-                    f"Frame {frame_id_for_log}: model_dump() returned {type(model_output_dict)}, expected dict."
-                )
-                error_data = {
-                    "frame_id": frame_id_for_log,
-                    "error": "AI model output serialization error.",
-                    "details": f"Expected dict from model_dump(), got {type(model_output_dict)}",
-                }
-                if self.loop:
-                    asyncio.run_coroutine_threadsafe(
-                        self.on_prediction_callback(error_data), self.loop)
-                return
-
-            # Extract image dimensions
-            image_width: Any = None
-            image_height: Any = None
-
-            # Try from model output (Roboflow standard)
-            img_info = model_output_dict.get("image", {})
-            if isinstance(img_info, dict):
-                image_width = img_info.get("width")
-                image_height = img_info.get("height")
-
-            # Fallback: Check for top-level image dimension keys in model output
-            if image_width is None:
-                image_width = model_output_dict.get("image_width")
-            if image_height is None:
-                image_height = model_output_dict.get("image_height")
-
-            # Fallback: Use video_frame (InferenceVideoFrame) dimensions
-            if (image_width is None or image_height is None) and hasattr(video_frame, 'image') and \
-               isinstance(video_frame.image, np.ndarray) and video_frame.image.ndim >= 2:
-                h_vf, w_vf = video_frame.image.shape[:2]
-                image_width = w_vf if image_width is None else image_width
-                image_height = h_vf if image_height is None else image_height
-
-            image_width = image_width if image_width is not None else "unknown"
-            image_height = image_height if image_height is not None else "unknown"
-
-            raw_detections_list = model_output_dict.get("predictions", [])
-            if not isinstance(raw_detections_list, list):
-                logger.warning(
-                    f"Frame {frame_id_for_log}: model_output_dict['predictions'] is {type(raw_detections_list)}, expected list. Defaulting to empty."
-                )
-                raw_detections_list = []
-
-            processed_detections = []
-            for det_idx, det in enumerate(raw_detections_list):
-                if not isinstance(det, dict):
-                    logger.warning(
-                        f"Frame {frame_id_for_log}, Detection {det_idx}: Item is {type(det)}, expected dict. Skipping."
-                    )
+            # 处理每个检测结果
+            for det in raw_detections:
+                if not det:
                     continue
 
                 detection_data = {
-                    "class": det.get("class_name", det.get("class", "unknown")),
-                    "class_id": det.get("class_id", -1),
-                    "confidence": det.get("confidence", 0.0),
-                    "bbox": {
-                        "x_center": det.get("x", 0.0),
-                        "y_center": det.get("y", 0.0),
-                        "width": det.get("width", 0.0),
-                        "height": det.get("height", 0.0),
-                    },
+                    "class": det.get("class", "unknown"),
+                    "confidence": float(det.get("confidence", 0.0)),
+                    "x_center": float(det.get("x", 0.0)),
+                    "y_center": float(det.get("y", 0.0)),
+                    "width": float(det.get("width", 0.0)),
+                    "height": float(det.get("height", 0.0))
                 }
-                tracker_id = det.get("tracker_id")
-                if tracker_id is not None:
-                    detection_data["tracker_id"] = tracker_id
+                detections.append(detection_data)
 
-                processed_detections.append(detection_data)
+            # 更新FPS
+            fps_counter.tick()
+            current_fps = fps_counter.get_fps()
 
+            # 构建输出数据
             processed_data = {
-                "frame_id": frame_id_for_log,
-                "image_dimensions": {
-                    "width": image_width,
-                    "height": image_height,
-                },
-                "detections": processed_detections,
+                "frame_id": self.frame_count,
+                "timestamp": int(asyncio.get_event_loop().time() * 1000),
+                "fps": round(current_fps, 2),
+                "detections": detections
             }
+
+            # 通过事件循环发送结果
             if self.loop:
                 asyncio.run_coroutine_threadsafe(
-                    self.on_prediction_callback(processed_data), self.loop)
+                    self.on_prediction_callback(processed_data),
+                    self.loop
+                )
 
         except Exception as e:
-            logger.error(
-                f"Frame {frame_id_for_log}: Error in _custom_on_prediction: {e}",
-                exc_info=True,
-            )
+            logger.error(f"Error processing predictions: {e}", exc_info=True)
             error_data = {
-                "frame_id": frame_id_for_log,
+                "frame_id": self.frame_count,
                 "error": str(e),
-                "details": "Failed to process AI prediction in _custom_on_prediction. Check server logs.",
+                "timestamp": int(asyncio.get_event_loop().time() * 1000)
             }
             if self.loop:
                 asyncio.run_coroutine_threadsafe(
-                    self.on_prediction_callback(error_data), self.loop)
+                    self.on_prediction_callback(error_data),
+                    self.loop
+                )
+
+    async def start(self):
+        """启动 AI 处理流程"""
+        if self.is_running:
+            logger.info("AIProcessor is already running")
+            return
+
+        if not self.inference_pipeline:
+            logger.error("Roboflow pipeline not initialized")
+            return
+
+        self.loop = asyncio.get_running_loop()
+
+        try:
+            # 启动推理管道，已在初始化时设置了视频源
+            self.inference_pipeline.start()
+            self.is_running = True
+            logger.info("AI processor started successfully")
+        except Exception as e:
+            logger.error(f"Failed to start AI processor: {e}", exc_info=True)
+            self.is_running = False
+            raise
+
+    async def stop(self):
+        """停止 AI 处理流程"""
+        if not self.is_running:
+            return
+
+        try:
+            if self.inference_pipeline:
+                self.inference_pipeline.stop()
+            self.inference_pipeline = None
+            self.is_running = False
+            logger.info("AI processor stopped successfully")
+        except Exception as e:
+            logger.error(f"Error stopping AI processor: {e}", exc_info=True)
+            raise
+
+# 用于测试的回调函数
 
 
 async def example_prediction_handler(prediction_data: Dict[str, Any]) -> None:
-    """
-    示例回调函数，用于处理来自 AIProcessor 的推理结果。
-    在实际应用中，这里会将数据通过 WebSocket 或其他方式发送给客户端。
-    """
+    """示例回调函数，用于处理来自 AIProcessor 的推理结果"""
     logger.info(
-        f"[Example Handler] Received AI prediction: {json.dumps(prediction_data, indent=2)}"
-    )
-
+        f"Received prediction: {json.dumps(prediction_data, indent=2)}")
 
 if __name__ == "__main__":
-    import logging  # Ensure logging is imported for __main__
-    logging.basicConfig(level=logging.INFO)  # Basic config for standalone run
-    main_logger = logging.getLogger(__name__)
-    main_logger.setLevel(logging.INFO)
-
-    TEST_RTSP_URL = "rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mov"
-
-    async def main_async_runner():  # Renamed main to avoid conflict if any
-        main_logger.info("Starting AI Processor standalone example...")
-
-        if not settings.ROBOFLOW_API_KEY:
-            main_logger.error(
-                "ROBOFLOW_API_KEY not found. Please set it in .env or environment."
-            )
-            return
+    async def main():
+        # 测试用的RTSP流
+        test_rtsp_url = "rtsp://wowzaec2demo.streamlock.net/vod/mp4:BigBuckBunny_115k.mov"
 
         processor = AIProcessor(
             model_id=settings.ROBOFLOW_MODEL_ID,
-            rtsp_url=TEST_RTSP_URL,
+            rtsp_url=test_rtsp_url,
             on_prediction_callback=example_prediction_handler,
-            api_key=settings.ROBOFLOW_API_KEY,
+            api_key=settings.ROBOFLOW_API_KEY
         )
-        start_task = None  # Initialize start_task
+
         try:
-            start_task = asyncio.create_task(processor.start())
-            main_logger.info(
-                f"AIProcessor start task created. Running for 60 seconds for testing..."
-            )
+            await processor.start()
+            # 运行60秒进行测试
             await asyncio.sleep(60)
-
-        except KeyboardInterrupt:
-            main_logger.info(
-                "Keyboard interrupt received, stopping AI Processor...")
-        except Exception as e:
-            main_logger.error(
-                f"An error occurred during standalone test: {e}", exc_info=True
-            )
         finally:
-            main_logger.info("Stopping AI Processor in standalone example...")
             await processor.stop()
-            if start_task and not start_task.done():  # Check if start_task was assigned
-                start_task.cancel()
-            main_logger.info("AI Processor standalone example finished.")
 
-    # asyncio.run(main_async_runner()) # Keep commented unless for direct testing
-    pass
+    # asyncio.run(main())  # 注释掉以防止直接运行

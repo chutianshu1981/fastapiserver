@@ -633,14 +633,21 @@ src/
 │   │   └── server.py         \# RTSP服务器核心 (使用系统 GStreamer)  
 │   ├── services/             \# 服务层  
 │   │   ├── \_\_init\_\_.py  
-│   │   └── video\_service.py  \# 视频处理服务  
-│   └── utils/                \# 工具函数 (可选)  
+│   │   ├── video\_service.py  \# 视频处理服务  
+│   │   ├── ai\_processor.py   \# AI 处理服务 (Roboflow InferencePipeline)  
+│   │   ├── processors.py     \# 处理器基类和工具  
+│   │   └── monitor.py        \# 性能监控服务  
+│   ├── websockets/           \# WebSocket 相关模块 (新增)  
+│   │   ├── \_\_init\_\_.py  
+│   │   └── manager.py        \# WebSocket 连接管理器  
+│   └── utils/                \# 工具函数  
 │       ├── \_\_init\_\_.py  
 │       └── helpers.py        \# 辅助函数  
 ├── videos/                   \# 视频存储目录 (运行时创建)  
 ├── tests/                    \# 测试代码  
 │   ├── \_\_init\_\_.py  
 │   ├── test\_api.py           \# API测试  
+│   ├── test\_ai\_processor.py  \# AI处理器测试  
 │   └── test\_video\_service.py \# 视频服务测试  
 ├── docker/                   \# Docker相关  
 │   ├── Dockerfile            \# 优化后的 Dockerfile  
@@ -667,11 +674,19 @@ authors \= \[
     {name \= "Your Name", email \= "your.email@example.com"},  
 \]  
 dependencies \= \[  
-    "fastapi\[standard\]\>=0.115.0,\<0.116.0", \# 包含 uvicorn, pydantic 等  
+    "fastapi\[standard\]~=0.110.0",       \# 调整版本兼容 Roboflow inference 库  
     "uvicorn\[standard\]\>=0.34.0,\<0.35.0",   \# 明确指定以获取标准性能库  
     "pydantic\>=2.11.0,\<3.0.0",  
-    "opencv-python\>=4.11.0,\<4.12.0",      \# 或 opencv-python-headless  
+    "opencv-python==4.10.0.84",           \# 固定版本以确保兼容性  
     "python-dotenv\>=1.0.0",  
+    "pydantic-settings~=2.7.0",           \# 用于配置管理  
+    "python-multipart\>=0.0.9",           \# 用于处理表单数据和文件上传  
+    "websockets\>=12.0.0",                \# WebSocket 服务器 
+    "roboflow\>=1.1.63",                  \# Roboflow 客户端  
+    "inference\>=0.49.1",                 \# Roboflow InferencePipeline  
+    "supervision\>=0.25.1",               \# 用于视觉分析和标注  
+    "numpy~=2.0.0",                       \# 兼容 inference  
+    "pandas\>=2.0.0",                     \# 用于数据处理  
     \# PyGObject 和 GStreamer 通过系统包安装，不在此列出  
 \]  
 requires-python \= "\>=3.12,\<3.13" \# 明确指定 Python 3.12
@@ -711,6 +726,7 @@ services:
       dockerfile: docker/Dockerfile  
     ports:  
       \- "8000:8000"   \# FastAPI API端口  
+      \- "8765:8765"   \# WebSocket 端口  
       \- "554:554/tcp" \# RTSP TCP 端口  
       \# RTSP 可能还需要 UDP 端口，范围取决于 GStreamer 配置  
       \# \- "5000-5010:5000-5010/udp" \# 示例 UDP 端口范围  
@@ -718,11 +734,21 @@ services:
       \-../videos:/app/videos \# 挂载视频存储目录  
     restart: unless-stopped  
     environment:  
-      \# 从.env 文件或直接设置环境变量  
+      \# 基本配置  
       \- RTSP\_PORT=554  
       \- RTSP\_PATH=/live  
       \- OUTPUT\_DIR=/app/videos  
       \- MAX\_VIDEO\_STORAGE\_DAYS=7  
+      \# AI 处理相关配置  
+      \- ROBOFLOW\_API\_KEY=your_roboflow_api_key  
+      \- ROBOFLOW\_MODEL\_ID=next-level-i0lpn/3  
+      \- ROBOFLOW\_CONFIDENCE\_THRESHOLD=0.7  
+      \- ENABLE\_AI\_PROCESSING=true  
+      \# WebSocket 相关配置  
+      \- WEBSOCKET\_PORT=8765  
+      \- MAX\_FPS=10  
+      \# 调试配置  
+      \# \- GST\_DEBUG=2
       \- LOG\_LEVEL=info  
       \# GStreamer 相关环境变量 (可选)  
       \# \- GST\_DEBUG=2  
@@ -752,6 +778,10 @@ ENV PATH="${PATH}:${PIPX\_BIN\_DIR}"
 RUN apt-get update && apt-get install \-y \--no-install-recommends \\  
     pipx \\  
     git \\  
+    build-essential \\ 
+    pkg-config \\  
+    libcairo2-dev \\  
+    libgirepository1.0-dev \\  
     && pipx install pdm==${PDM\_VERSION} \\  
     && apt-get purge \-y \--auto-remove \\  
     && rm \-rf /var/lib/apt/lists/\*
@@ -813,7 +843,9 @@ COPY./src/app /app/app
 \# 暴露 FastAPI 端口  
 EXPOSE 8000  
 \# 暴露 RTSP 端口 (TCP)  
-EXPOSE 554
+EXPOSE 554  
+\# 暴露 WebSocket 端口  
+EXPOSE 8765
 
 \# 启动命令 (使用 uvicorn 运行 FastAPI 应用)  
 \# 注意：如果 main.py 在 app/ 目录下，则为 app.main:app  
@@ -893,4 +925,1409 @@ CMD \["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"\]
 
 ## **总结**
 
-本方案采纳了 **Python 3.12**、**Pydantic V2** 和 **PDM** 等现代化工具和实践，旨在提升 RTSP 视频流接收服务器的性能、可维护性和部署可靠性。通过推荐使用 Debian Bookworm 系统自带的 **GStreamer 1.22** 版本，简化了复杂系统依赖的管理。方案强调了**容器化 (Docker)** 的重要性，并提供了更新的 pyproject.toml、Dockerfile 和 docker-compose.yml 配置示例。代码示例也相应调整以反映推荐的技术栈和设计模式（如使用 appsink）。该方案在满足核心需求的同时，为未来的功能扩展奠定了坚实的基础。
+本方案采纳了 **Python 3.12**、**Pydantic V2** 和 **PDM** 等现代化工具和实践，旨在提升 RTSP 视频流接收服务器的性能、可维护性和部署可靠性。通过推荐使用 Debian Bookworm 系统自带的 **GStreamer 1.22** 版本，简化了复杂系统依赖的管理。方案强调了**容器化 (Docker)** 的重要性，并提供了更新的 pyproject.toml、Dockerfile 和 docker-compose.yml 配置示例。
+
+系统集成了 **Roboflow InferencePipeline** 用于实时 AI 处理，能够对视频流进行盲道检测分析，并通过 **WebSocket** 实时将结构化的检测结果推送至客户端应用。这种实时数据传输架构让系统能够与 Android 客户端进行高效通信，满足用户在行走过程中对实时盲道检测的需求。
+
+代码实现采用模块化设计，通过清晰的依赖注入和异步处理提高系统性能和可靠性。方案提供了面向生产环境的完整配置和部署指南，简化了系统上线流程。该方案在满足核心需求的同时，为未来的功能扩展如更多 AI 模型集成、实时警报等功能奠定了坚实的基础。
+
+## **AI 视频流处理与 WebSocket 数据传输**
+
+### **Roboflow InferencePipeline 集成**
+
+本方案集成了 Roboflow 的 InferencePipeline 组件，用于对 RTSP 视频流进行实时 AI 分析。InferencePipeline 是 Roboflow Inference 库中专为处理流式视频数据设计的核心组件，采用异步方式处理视频源，能够高效地分析来自 RTSP 流的数据。
+
+#### **AI 处理架构**
+
+`app/services/ai_processor.py` 模块实现了 AIProcessor 类，封装了 Roboflow InferencePipeline 的功能：
+
+```python
+class AIProcessor:
+    """
+    封装 Roboflow InferencePipeline，用于处理视频帧并进行 AI 分析。
+    """
+
+    def __init__(
+        self,
+        model_id: str,
+        rtsp_url: str,
+        on_prediction_callback: Callable[[Dict[str, Any]], Coroutine[Any, Any, None]],
+        api_key: Optional[str] = None,
+    ):
+        """
+        初始化 AIProcessor。
+
+        Args:
+            model_id: Roboflow 模型 ID
+            rtsp_url: RTSP 视频流地址
+            on_prediction_callback: 异步回调函数，用于处理每帧的推理结果
+            api_key: Roboflow API 密钥
+        """
+        # 初始化成员变量...
+        
+        # 初始化 Roboflow 推理管道
+        self.inference_pipeline = InferencePipeline.init(
+            model_id=self.model_id,
+            video_reference=self.rtsp_url,  # 设置视频源
+            api_key=self.api_key,
+            confidence=settings.ROBOFLOW_CONFIDENCE_THRESHOLD,
+            on_prediction=self._on_prediction
+        )
+```
+
+#### **预测结果处理**
+
+AI 处理器实现了 `_on_prediction` 回调函数，在每次模型推理完成后被调用。该函数解析模型输出结果，并将其转换为统一的 JSON 格式：
+
+```python
+def _on_prediction(self, predictions: Any, video_frame: Any) -> None:
+    """
+    处理 Roboflow 推理结果的回调函数
+
+    Args:
+        predictions: 模型推理结果
+        video_frame: 视频帧数据
+    """
+    # 处理检测结果
+    detections = []
+    if hasattr(predictions, "predictions"):
+        raw_detections = predictions.predictions
+    elif isinstance(predictions, list):
+        raw_detections = predictions
+    else:
+        raw_detections = [predictions]
+
+    # 处理每个检测结果
+    for det in raw_detections:
+        if not det:
+            continue
+
+        detection_data = {
+            "class": det.get("class", "unknown"),
+            "confidence": float(det.get("confidence", 0.0)),
+            "x_center": float(det.get("x", 0.0)),
+            "y_center": float(det.get("y", 0.0)),
+            "width": float(det.get("width", 0.0)),
+            "height": float(det.get("height", 0.0))
+        }
+        detections.append(detection_data)
+
+    # 构建输出数据
+    processed_data = {
+        "frame_id": self.frame_count,
+        "timestamp": int(asyncio.get_event_loop().time() * 1000),
+        "fps": round(current_fps, 2),
+        "detections": detections
+    }
+    
+    # 通过异步回调发送处理结果
+    if self.loop:
+        asyncio.run_coroutine_threadsafe(
+            self.on_prediction_callback(processed_data),
+            self.loop
+        )
+```
+
+### **WebSocket 数据传输**
+
+为了实现与客户端的实时数据传输，系统集成了 WebSocket 服务器，能够将 AI 处理结果实时推送给订阅的客户端（如 Android 应用）。
+
+#### **WebSocket 连接管理**
+
+`app/websockets/manager.py` 模块实现了 WebSocket 连接管理器：
+
+```python
+class WebSocketManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+        
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+        
+    async def broadcast(self, message: Dict[str, Any]):
+        """向所有活跃连接广播消息"""
+        disconnected = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                disconnected.append(connection)
+                
+        # 移除断开的连接
+        for connection in disconnected:
+            self.disconnect(connection)
+```
+
+#### **WebSocket 路由**
+
+在 FastAPI 应用中添加 WebSocket 路由处理连接请求：
+
+```python
+# 在 app/api/routes.py 中添加
+
+from fastapi import APIRouter, WebSocket, Depends
+from app.websockets.manager import WebSocketManager
+
+router = APIRouter()
+websocket_manager = WebSocketManager()
+
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket 连接端点，用于实时推送 AI 检测结果"""
+    await websocket_manager.connect(websocket)
+    try:
+        # 保持连接，直到客户端断开
+        while True:
+            # 可选：接收客户端消息
+            data = await websocket.receive_text()
+            # 处理来自客户端的消息...
+    except Exception as e:
+        # 处理连接断开
+        websocket_manager.disconnect(websocket)
+```
+
+#### **AI 结果推送**
+
+AI 处理结果通过 WebSocket 广播给所有连接的客户端：
+
+```python
+# 在 AI 处理服务中定义推送函数
+
+async def broadcast_ai_results(prediction_data: Dict[str, Any]):
+    """将 AI 检测结果广播给所有 WebSocket 客户端"""
+    await websocket_manager.broadcast(prediction_data)
+```
+
+### **数据格式规范**
+
+系统采用标准化的 JSON 格式在服务端和客户端之间传输数据：
+
+```json
+{
+  "frame_id": 1234,
+  "timestamp": 1684036923456,
+  "fps": 8.5,
+  "detections": [
+    {
+      "class": "tactile_paving",
+      "confidence": 0.95,
+      "x_center": 320.5,
+      "y_center": 240.3,
+      "width": 100.0,
+      "height": 50.0
+    },
+    // 可能有多个检测结果...
+  ]
+}
+```
+
+### **服务启动流程**
+
+在应用启动时，AI 处理器和 WebSocket 服务器一起被初始化和启动：
+
+```python
+# 在 app/main.py 中
+
+@app.on_event("startup")
+async def startup_event():
+    global rtsp_thread, periodic_task, ai_processor
+    logger.info("应用启动，正在初始化...")
+
+    # 在单独线程中启动 GObject 主循环以运行 RTSP 服务器
+    rtsp_thread = threading.Thread(target=run_rtsp_server_loop, daemon=True)
+    rtsp_thread.start()
+
+    # 启动定期任务
+    periodic_task = asyncio.create_task(periodic_tasks())
+
+    # 如果启用 AI 处理，初始化 AI 处理器
+    if settings.ENABLE_AI_PROCESSING:
+        ai_processor = AIProcessor(
+            model_id=settings.ROBOFLOW_MODEL_ID,
+            rtsp_url=f"rtsp://127.0.0.1:{settings.RTSP_PORT}{settings.RTSP_PATH}",
+            on_prediction_callback=broadcast_ai_results,
+            api_key=settings.ROBOFLOW_API_KEY
+        )
+        await ai_processor.start()
+        logger.info("AI 处理器已启动")
+
+    logger.info("应用启动完成。")
+```
+
+### **扩展配置选项**
+
+在 `app/core/config.py` 中添加 AI 处理和 WebSocket 相关的配置参数：
+
+```python
+class AppSettings(BaseSettings):
+    # 现有配置...
+    
+    # AI 处理相关配置
+    ENABLE_AI_PROCESSING: bool = True
+    ROBOFLOW_API_KEY: Optional[str] = None
+    ROBOFLOW_MODEL_ID: str = "next-level-i0lpn/3"
+    ROBOFLOW_CONFIDENCE_THRESHOLD: float = 0.7
+    
+    # WebSocket 相关配置
+    WEBSOCKET_PORT: int = 8765
+    MAX_FPS: int = 10
+```
+
+通过这种方式，系统能够接收 RTSP 视频流、进行 AI 分析，并通过 WebSocket 将结果实时推送给客户端，满足实时盲道检测和数据传输的需求。
+
+## **WebSocket 与 Android 客户端集成**
+
+为了完成 Android 与服务器端的实时通信需求，本方案实现了完整的 WebSocket 通信架构，确保 AI 检测结果能够及时传递给移动端用户，从而提供实时盲道检测信息。
+
+### **服务端 WebSocket 实现**
+
+#### **WebSocket 路由配置**
+
+在 FastAPI 中添加专用于 WebSocket 的端点路由：
+
+```python
+# app/api/routes.py 中添加 WebSocket 端点
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from app.websockets.manager import WebSocketManager
+
+router = APIRouter()
+# WebSocket 连接管理器实例
+websocket_manager = WebSocketManager()
+
+@router.websocket("/ws/detection")
+async def detection_websocket(websocket: WebSocket):
+    """
+    WebSocket 端点用于接收实时盲道检测结果
+    """
+    await websocket_manager.connect(websocket)
+    try:
+        # 发送初始连接确认消息
+        await websocket.send_json({"status": "connected", "message": "连接成功"})
+        
+        # 保持连接开启，等待客户端消息
+        while True:
+            # 如果需要处理来自客户端的消息
+            data = await websocket.receive_text()
+            await websocket.send_json({"status": "received", "message": f"服务器收到: {data}"})
+    except WebSocketDisconnect:
+        # 处理连接断开
+        websocket_manager.disconnect(websocket)
+        logger.info("WebSocket 客户端断开连接")
+    except Exception as e:
+        logger.error(f"WebSocket 连接发生错误: {e}")
+        websocket_manager.disconnect(websocket)
+```
+
+#### **WebSocket 连接管理**
+
+为了高效地管理多个客户端连接，实现了专门的连接管理器：
+
+```python
+# app/websockets/manager.py
+
+from fastapi import WebSocket
+from typing import List, Dict, Any
+import asyncio
+from loguru import logger
+
+class WebSocketManager:
+    """
+    WebSocket 连接管理器，用于管理多个客户端连接并广播消息
+    """
+    
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+        self.connection_count: int = 0
+        
+    async def connect(self, websocket: WebSocket):
+        """接受并存储新的 WebSocket 连接"""
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        self.connection_count += 1
+        logger.info(f"新 WebSocket 客户端已连接，当前连接数: {self.connection_count}")
+        
+    def disconnect(self, websocket: WebSocket):
+        """关闭并移除 WebSocket 连接"""
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+            self.connection_count -= 1
+            logger.info(f"WebSocket 客户端已断开，当前连接数: {self.connection_count}")
+    
+    async def send_personal_message(self, message: Dict[str, Any], websocket: WebSocket):
+        """向指定客户端发送消息"""
+        try:
+            await websocket.send_json(message)
+        except Exception as e:
+            logger.error(f"发送个人消息失败: {e}")
+            self.disconnect(websocket)
+    
+    async def broadcast(self, message: Dict[str, Any]):
+        """向所有连接的客户端广播消息"""
+        disconnected_clients = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception as e:
+                logger.error(f"广播消息到客户端失败: {e}")
+                disconnected_clients.append(connection)
+        
+        # 清理断开的连接
+        for disconnected in disconnected_clients:
+            self.disconnect(disconnected)
+```
+
+### **Android 端 WebSocket 集成**
+
+Android 客户端需要实现对应的 WebSocket 客户端功能，以接收来自服务器的实时 AI 检测数据：
+
+#### **OkHttp 的 WebSocket 实现**
+
+使用 OkHttp 库实现高效的 WebSocket 客户端：
+
+```kotlin
+// 在 Android 应用中实现
+
+import okhttp3.*
+import okio.ByteString
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+
+class DetectionWebSocketClient(
+    private val serverUrl: String,
+    private val onMessageListener: (DetectionResult) -> Unit,
+    private val onConnectionStatusChanged: (Boolean) -> Unit
+) {
+    private var webSocket: WebSocket? = null
+    private val client = OkHttpClient.Builder()
+        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .build()
+    
+    private val webSocketListener = object : WebSocketListener() {
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            onConnectionStatusChanged(true)
+        }
+        
+        override fun onMessage(webSocket: WebSocket, text: String) {
+            try {
+                val jsonObject = JSONObject(text)
+                val detectionResult = parseDetectionResult(jsonObject)
+                onMessageListener(detectionResult)
+            } catch (e: Exception) {
+                Log.e("WebSocket", "解析消息失败", e)
+            }
+        }
+        
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            onConnectionStatusChanged(false)
+        }
+        
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            onConnectionStatusChanged(false)
+            // 实现自动重连逻辑
+            reconnect()
+        }
+    }
+    
+    fun connect() {
+        val request = Request.Builder()
+            .url("${serverUrl}/ws/detection")
+            .build()
+        webSocket = client.newWebSocket(request, webSocketListener)
+    }
+    
+    fun disconnect() {
+        webSocket?.close(1000, "正常关闭")
+        webSocket = null
+    }
+    
+    fun reconnect() {
+        disconnect()
+        // 延迟重连，避免立即重连造成的连续失败
+        Handler(Looper.getMainLooper()).postDelayed({
+            connect()
+        }, 3000)
+    }
+    
+    private fun parseDetectionResult(jsonObject: JSONObject): DetectionResult {
+        // 解析 JSON 数据为检测结果对象
+        // 实现与服务端 JSON 格式一致的解析逻辑
+        return DetectionResult(
+            frameId = jsonObject.optLong("frame_id"),
+            timestamp = jsonObject.optLong("timestamp"),
+            fps = jsonObject.optDouble("fps"),
+            detections = parseDetections(jsonObject.optJSONArray("detections"))
+        )
+    }
+    
+    // 解析检测结果数组
+    private fun parseDetections(jsonArray: JSONArray?): List<Detection> {
+        val detections = mutableListOf<Detection>()
+        jsonArray?.let {
+            for (i in 0 until it.length()) {
+                val item = it.optJSONObject(i)
+                detections.add(
+                    Detection(
+                        className = item.optString("class"),
+                        confidence = item.optDouble("confidence"),
+                        xCenter = item.optDouble("x_center"),
+                        yCenter = item.optDouble("y_center"),
+                        width = item.optDouble("width"),
+                        height = item.optDouble("height")
+                    )
+                )
+            }
+        }
+        return detections
+    }
+}
+```
+
+#### **Android 客户端界面集成**
+
+在 Android 界面中显示检测结果：
+
+```kotlin
+// MainActivity.kt
+
+class MainActivity : AppCompatActivity() {
+    private lateinit var webSocketClient: DetectionWebSocketClient
+    private lateinit var videoPreview: TextureView
+    private lateinit var detectionOverlay: DetectionOverlayView
+    
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        
+        videoPreview = findViewById(R.id.video_preview)
+        detectionOverlay = findViewById(R.id.detection_overlay)
+        
+        // 初始化 RTSP 推流
+        setupRtspStreaming()
+        
+        // 初始化 WebSocket 连接
+        val serverUrl = "ws://your-server-ip:8765"
+        webSocketClient = DetectionWebSocketClient(
+            serverUrl = serverUrl,
+            onMessageListener = { detectionResult ->
+                // 更新检测结果显示
+                runOnUiThread {
+                    detectionOverlay.updateDetections(detectionResult.detections)
+                }
+            },
+            onConnectionStatusChanged = { isConnected ->
+                // 更新连接状态 UI
+                updateConnectionStatus(isConnected)
+            }
+        )
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        // 连接 WebSocket
+        webSocketClient.connect()
+    }
+    
+    override fun onPause() {
+        super.onPause()
+        // 断开 WebSocket
+        webSocketClient.disconnect()
+    }
+    
+    private fun updateConnectionStatus(isConnected: Boolean) {
+        // 根据连接状态更新 UI
+        val statusText = findViewById<TextView>(R.id.connection_status)
+        statusText.text = if (isConnected) "已连接服务器" else "未连接服务器"
+        statusText.setTextColor(if (isConnected) Color.GREEN else Color.RED)
+    }
+}
+```
+
+### **集成测试**
+
+为确保 WebSocket 通信的可靠性，需要进行端到端测试，包括：
+
+1. **连接稳定性测试**：测试客户端连接、断开、重连场景
+2. **数据格式一致性测试**：确保客户端和服务器端的数据结构匹配
+3. **高并发测试**：模拟多客户端同时连接，验证系统稳定性
+4. **网络波动测试**：测试在不稳定网络环境下的系统表现
+
+### **WebSocket 性能优化**
+
+为确保实时性和稳定性，采取了以下优化措施：
+
+1. **数据压缩**：对大量数据传输场景，考虑使用 MessagePack 或 CBOR 代替 JSON 减小数据体积
+2. **批量发送**：控制消息频率，合理设置发送间隔，避免消息风暴
+3. **自适应帧率**：根据网络状况和客户端负载自动调整 AI 分析和消息发送频率
+4. **心跳机制**：实现 ping/pong 机制，及时检测连接状态，避免连接悬挂
+5. **分级日志**：对 WebSocket 通信实现详细的分级日志，便于问题排查
+
+## **整合 RTSP 服务器与 AI 处理流程**
+
+为了实现从 RTSP 视频流接收到 AI 分析并最终通过 WebSocket 发送结果的完整链路，本方案设计了高效的集成方案，确保各组件间平滑交互。
+
+### **RTSP 流与 Roboflow 集成架构**
+
+系统采用两种可选的集成架构，根据部署环境和性能需求灵活选择：
+
+#### **方案一：直接 RTSP URL 传递**
+
+Roboflow InferencePipeline 直接使用 RTSP URL 作为视频源：
+
+```plaintext
+RTSP 客户端 ──> RTSP 服务器 ──┐
+                             │
+                             │ RTSP URL
+                             │
+                             ▼
+                     Roboflow InferencePipeline
+                             │
+                             │ on_prediction 回调
+                             │
+                             ▼
+                     WebSocket 广播消息
+```
+
+此方案配置简单，实现代码如下：
+
+```python
+# 初始化 AI 处理器，直接使用 RTSP URL
+ai_processor = AIProcessor(
+    model_id=settings.ROBOFLOW_MODEL_ID,
+    rtsp_url=f"rtsp://127.0.0.1:{settings.RTSP_PORT}{settings.RTSP_PATH}",  # 内部 RTSP URL
+    on_prediction_callback=broadcast_ai_results,
+    api_key=settings.ROBOFLOW_API_KEY
+)
+```
+
+#### **方案二：使用 GStreamer Appsink**
+
+通过 GStreamer 的 appsink 获取解码后的视频帧，传递给 Roboflow 处理：
+
+```plaintext
+RTSP 客户端 ──> RTSP 服务器 (GStreamer) ──> appsink 回调
+                                          │
+                                          │ 转换为 NumPy 数组
+                                          │
+                                          ▼
+                                  Roboflow 处理帧
+                                          │
+                                          │ 推理结果
+                                          │
+                                          ▼
+                                  WebSocket 广播消息
+```
+
+实现 appsink 回调函数，解析 GStreamer 缓冲区：
+
+```python
+def on_new_sample(sink, data):
+    """处理来自 GStreamer pipeline 的新样本"""
+    sample = sink.emit("pull-sample")
+    if sample:
+        buffer = sample.get_buffer()
+        caps = sample.get_caps()
+        
+        # 获取视频格式信息
+        structure = caps.get_structure(0)
+        width = structure.get_value("width")
+        height = structure.get_value("height")
+        
+        # 将 GStreamer 缓冲区转换为 NumPy 数组
+        buffer_size = buffer.get_size()
+        array_ptr = buffer.extract_dup(0, buffer_size)
+        numpy_array = np.ndarray(
+            shape=(height, width, 3),
+            dtype=np.uint8,
+            buffer=array_ptr
+        )
+        
+        # 将帧送入处理队列
+        frame_queue.put(numpy_array)
+        return Gst.FlowReturn.OK
+    
+    return Gst.FlowReturn.ERROR
+```
+
+然后在单独线程中处理队列中的帧：
+
+```python
+def process_frames():
+    """从队列获取帧并进行 AI 处理"""
+    while True:
+        frame = frame_queue.get()
+        if frame is None:  # 结束信号
+            break
+            
+        # 使用 Roboflow 处理帧
+        result = roboflow_model.infer(frame)
+        
+        # 解析结果
+        processed_data = parse_result(result, frame)
+        
+        # 通过 WebSocket 发送结果
+        asyncio.run_coroutine_threadsafe(
+            websocket_manager.broadcast(processed_data),
+            loop
+        )
+```
+
+### **系统主流程整合**
+
+在 `app/main.py` 中，启动 RTSP 服务器、AI 处理器和 WebSocket 服务的完整逻辑：
+
+```python
+@app.on_event("startup")
+async def startup_event():
+    global rtsp_thread, ai_processor, periodic_task
+    logger.info("应用启动中，正在初始化组件...")
+
+    # 1. 启动 RTSP 服务器 (在单独线程中运行 GObject 主循环)
+    rtsp_thread = threading.Thread(target=run_rtsp_server_loop, daemon=True)
+    rtsp_thread.start()
+    logger.info("RTSP 服务器启动完成")
+    
+    # 2. 等待 RTSP 服务器完全启动 (可以使用事件或延时)
+    await asyncio.sleep(2)
+    
+    # 3. 启动 AI 处理器
+    if settings.ENABLE_AI_PROCESSING:
+        try:
+            # 创建 AI 处理器实例
+            ai_processor = AIProcessor(
+                model_id=settings.ROBOFLOW_MODEL_ID,
+                rtsp_url=f"rtsp://127.0.0.1:{settings.RTSP_PORT}{settings.RTSP_PATH}",
+                on_prediction_callback=broadcast_ai_results,
+                api_key=settings.ROBOFLOW_API_KEY
+            )
+            # 启动处理流程
+            await ai_processor.start()
+            logger.info(f"AI 处理器启动完成，使用模型: {settings.ROBOFLOW_MODEL_ID}")
+        except Exception as e:
+            logger.error(f"AI 处理器启动失败: {e}", exc_info=True)
+    
+    # 4. 启动定期任务 (如视频文件清理)
+    periodic_task = asyncio.create_task(periodic_tasks())
+    
+    logger.info("所有组件启动完成，系统就绪")
+```
+
+### **AI 结果广播到 WebSocket 的实现**
+
+定义广播函数，将 AI 处理结果发送到所有连接的客户端：
+
+```python
+# 全局 WebSocketManager 实例
+websocket_manager = WebSocketManager()
+
+async def broadcast_ai_results(prediction_data: Dict[str, Any]) -> None:
+    """
+    将 AI 检测结果广播到所有已连接的 WebSocket 客户端
+    
+    Args:
+        prediction_data: 包含 AI 检测结果的字典
+    """
+    try:
+        # 检查结果中是否有盲道检测
+        has_tactile_paving = False
+        if "detections" in prediction_data:
+            for det in prediction_data["detections"]:
+                if det.get("class") == "tactile_paving" and det.get("confidence", 0) > settings.ROBOFLOW_CONFIDENCE_THRESHOLD:
+                    has_tactile_paving = True
+                    break
+        
+        # 添加标志位，指示是否检测到盲道
+        prediction_data["has_tactile_paving"] = has_tactile_paving
+        
+        # 添加服务器时间戳
+        if "server_timestamp" not in prediction_data:
+            prediction_data["server_timestamp"] = int(time.time() * 1000)
+            
+        # 广播消息到所有客户端
+        await websocket_manager.broadcast(prediction_data)
+        
+        # 记录检测结果 (可选择仅在检测到目标时记录)
+        if has_tactile_paving:
+            logger.info(f"检测到盲道！置信度: {max([d.get('confidence', 0) for d in prediction_data['detections'] if d.get('class') == 'tactile_paving']):.2f}")
+        
+        # 更新监控指标
+        metrics.update_detection_metrics(prediction_data)
+        
+    except Exception as e:
+        logger.error(f"广播 AI 结果失败: {e}", exc_info=True)
+```
+
+### **启动与关闭流程**
+
+完整的启动与关闭流程，确保所有组件能够优雅启动和关闭：
+
+```python
+@app.on_event("startup")
+async def startup_event():
+    # ... (之前的启动代码)
+    pass
+
+@app.on_event("shutdown")
+async def shutdown_app():
+    """优雅关闭所有组件"""
+    logger.info("收到关闭信号，开始优雅关闭...")
+    
+    # 1. 关闭 AI 处理器
+    if ai_processor:
+        logger.info("正在停止 AI 处理器...")
+        await ai_processor.stop()
+    
+    # 2. 停止 GObject 主循环
+    if mainloop and mainloop.is_running():
+        logger.info("正在停止 GObject 主循环...")
+        mainloop.quit()
+    
+    # 3. 等待 RTSP 服务器线程结束
+    if rtsp_thread and rtsp_thread.is_alive():
+        logger.info("等待 RTSP 服务器线程退出...")
+        rtsp_thread.join(timeout=5)  # 等待最多 5 秒
+        if rtsp_thread.is_alive():
+            logger.warning("RTSP 服务器线程未在超时内退出")
+    
+    # 4. 取消定期任务
+    if periodic_task:
+        logger.info("正在取消定期任务...")
+        periodic_task.cancel()
+        try:
+            await periodic_task
+        except asyncio.CancelledError:
+            logger.info("定期任务已取消")
+    
+    # 5. 关闭所有 WebSocket 连接
+    if websocket_manager and hasattr(websocket_manager, "close_all"):
+        logger.info("关闭所有 WebSocket 连接...")
+        await websocket_manager.close_all()
+    
+    logger.info("所有组件已关闭，应用退出")
+```
+
+### **性能监控与系统调优**
+
+为确保系统在长时间运行中保持稳定性能，实现了性能监控模块：
+
+```python
+# app/services/monitor.py
+
+import time
+import threading
+import psutil
+import numpy as np
+from typing import Dict, List, Any
+from collections import deque
+
+class PerformanceMonitor:
+    """系统性能监控器，记录 CPU、内存、推理时间等指标"""
+    
+    def __init__(self, window_size: int = 100):
+        self.window_size = window_size
+        self.inference_times = deque(maxlen=window_size)
+        self.fps_values = deque(maxlen=window_size)
+        self.memory_usage = deque(maxlen=window_size)
+        self.cpu_usage = deque(maxlen=window_size)
+        self.detection_counts = deque(maxlen=window_size)
+        
+        self.monitor_thread = None
+        self.running = False
+        
+        # 锁用于线程安全更新
+        self.lock = threading.Lock()
+    
+    def start(self):
+        """启动性能监控线程"""
+        self.running = True
+        self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self.monitor_thread.start()
+    
+    def stop(self):
+        """停止性能监控线程"""
+        self.running = False
+        if self.monitor_thread and self.monitor_thread.is_alive():
+            self.monitor_thread.join(timeout=2)
+    
+    def _monitor_loop(self):
+        """定期收集系统性能指标"""
+        while self.running:
+            try:
+                # 收集 CPU 和内存使用情况
+                cpu_percent = psutil.cpu_percent(interval=1)
+                mem_info = psutil.virtual_memory()
+                
+                with self.lock:
+                    self.cpu_usage.append(cpu_percent)
+                    self.memory_usage.append(mem_info.percent)
+                
+            except Exception as e:
+                print(f"监控异常: {e}")
+            
+            # 每秒收集一次系统指标
+            time.sleep(1)
+    
+    def record_inference_time(self, duration_ms: float):
+        """记录单次推理时间 (毫秒)"""
+        with self.lock:
+            self.inference_times.append(duration_ms)
+    
+    def record_fps(self, fps: float):
+        """记录当前 FPS"""
+        with self.lock:
+            self.fps_values.append(fps)
+    
+    def update_detection_metrics(self, prediction_data: Dict[str, Any]):
+        """根据预测结果更新检测相关指标"""
+        if "fps" in prediction_data:
+            self.record_fps(prediction_data["fps"])
+        
+        if "detections" in prediction_data:
+            with self.lock:
+                self.detection_counts.append(len(prediction_data["detections"]))
+    
+    def get_metrics(self) -> Dict[str, Any]:
+        """获取汇总的性能指标"""
+        with self.lock:
+            avg_inference_time = np.mean(self.inference_times) if self.inference_times else 0
+            avg_fps = np.mean(self.fps_values) if self.fps_values else 0
+            avg_cpu = np.mean(self.cpu_usage) if self.cpu_usage else 0
+            avg_mem = np.mean(self.memory_usage) if self.memory_usage else 0
+            avg_detections = np.mean(self.detection_counts) if self.detection_counts else 0
+            
+            return {
+                "avg_inference_time_ms": round(avg_inference_time, 2),
+                "avg_fps": round(avg_fps, 2),
+                "avg_cpu_percent": round(avg_cpu, 2),
+                "avg_memory_percent": round(avg_mem, 2),
+                "avg_detections_per_frame": round(avg_detections, 2),
+                "samples_count": len(self.fps_values)
+            }
+```
+
+在 API 路由中添加性能指标端点：
+
+```python
+# 在 app/api/routes.py 中添加
+
+@router.get("/metrics", response_model=Dict[str, Any])
+async def get_performance_metrics():
+    """获取系统性能指标"""
+    from app.main import performance_monitor
+    
+    if not performance_monitor:
+        raise HTTPException(status_code=503, detail="性能监控未启用")
+    
+    return performance_monitor.get_metrics()
+```
+
+通过这种整合方式，系统能够高效地接收 RTSP 视频流、进行 AI 处理，并通过 WebSocket 将结果实时推送给移动客户端，同时通过监控模块确保系统性能稳定。
+
+## **未来功能增强与优化**
+
+随着系统的持续发展，以下是一些有价值的功能增强和优化方向：
+
+### **AI 功能增强**
+
+#### **1. 多模型支持**
+
+扩展系统以支持多种 AI 模型同时运行，实现更全面的环境感知：
+
+```python
+class ModelManager:
+    """管理多个 AI 模型实例"""
+    
+    def __init__(self):
+        self.models = {}  # 模型字典: {model_name: model_instance}
+        
+    async def load_model(self, model_name: str, model_id: str, api_key: str = None):
+        """动态加载指定的模型"""
+        self.models[model_name] = AIProcessor(
+            model_id=model_id,
+            rtsp_url=f"rtsp://127.0.0.1:{settings.RTSP_PORT}{settings.RTSP_PATH}",
+            on_prediction_callback=lambda x: self._handle_prediction(model_name, x),
+            api_key=api_key or settings.ROBOFLOW_API_KEY
+        )
+        await self.models[model_name].start()
+        
+    async def _handle_prediction(self, model_name: str, prediction: Dict[str, Any]):
+        """处理来自特定模型的预测结果"""
+        # 添加模型源标识
+        prediction["model_name"] = model_name
+        
+        # 发送到相应的处理逻辑
+        if model_name == "tactile_paving":
+            await handle_tactile_paving_prediction(prediction)
+        elif model_name == "obstacle":
+            await handle_obstacle_prediction(prediction)
+        # ... 其他模型处理逻辑 ...
+        
+        # 发送综合结果
+        await websocket_manager.broadcast(prediction)
+```
+
+#### **2. 模型切换与热加载**
+
+实现模型的运行时更新与切换，无需重启服务：
+
+```python
+@router.post("/models/{model_name}/update")
+async def update_model(
+    model_name: str, 
+    model_info: ModelUpdateRequest
+):
+    """动态更新或切换 AI 模型"""
+    if model_name in model_manager.models:
+        # 停止现有模型
+        await model_manager.stop_model(model_name)
+        
+    # 加载新模型
+    await model_manager.load_model(
+        model_name=model_name,
+        model_id=model_info.model_id,
+        api_key=model_info.api_key
+    )
+    
+    return {"status": "success", "message": f"模型 {model_name} 已更新为 {model_info.model_id}"}
+```
+
+#### **3. 物体追踪**
+
+除了检测外，增加物体追踪功能，实现对盲道的持续跟踪：
+
+```python
+from supervision.tracker.byte_track import ByteTrack
+
+class ObjectTracker:
+    """使用 ByteTrack 算法跟踪检测到的物体"""
+    
+    def __init__(self):
+        self.tracker = ByteTrack()
+        
+    def track(self, detections):
+        """使用追踪器处理当前帧的检测结果"""
+        # 转换检测格式为 tracker 需要的格式
+        xyxy_boxes = []
+        confidence_scores = []
+        class_ids = []
+        
+        for det in detections:
+            x_center = det["x_center"]
+            y_center = det["y_center"]
+            width = det["width"]
+            height = det["height"]
+            
+            # 转换中心点坐标为左上右下坐标
+            x1 = x_center - width / 2
+            y1 = y_center - height / 2
+            x2 = x_center + width / 2
+            y2 = y_center + height / 2
+            
+            xyxy_boxes.append([x1, y1, x2, y2])
+            confidence_scores.append(det["confidence"])
+            class_ids.append(TARGET_CLASS_IDS.get(det["class"], 0))
+        
+        # 使用 ByteTrack 进行追踪
+        detections_with_tracking = self.tracker.update(
+            xyxy=np.array(xyxy_boxes),
+            confidence=np.array(confidence_scores),
+            class_id=np.array(class_ids)
+        )
+        
+        # 将追踪结果合并回原始检测数据
+        result = []
+        for i, det in enumerate(detections):
+            if i < len(detections_with_tracking.tracker_id):
+                det["tracker_id"] = int(detections_with_tracking.tracker_id[i])
+                result.append(det)
+            else:
+                result.append(det)
+                
+        return result
+```
+
+### **系统稳定性增强**
+
+#### **1. 自动恢复机制**
+
+强化系统自动恢复能力，处理各种故障场景：
+
+```python
+class SystemWatchdog:
+    """系统自动恢复监视器"""
+    
+    def __init__(self, check_interval: int = 60):
+        self.check_interval = check_interval
+        self.running = False
+        self.watchdog_task = None
+        
+    async def start(self):
+        """启动监视器"""
+        self.running = True
+        self.watchdog_task = asyncio.create_task(self._monitor_loop())
+        
+    async def stop(self):
+        """停止监视器"""
+        self.running = False
+        if self.watchdog_task:
+            self.watchdog_task.cancel()
+            try:
+                await self.watchdog_task
+            except asyncio.CancelledError:
+                pass
+            
+    async def _monitor_loop(self):
+        """定期检查系统组件状态并尝试恢复"""
+        while self.running:
+            try:
+                # 检查 RTSP 服务器
+                if not is_rtsp_server_healthy():
+                    logger.warning("RTSP 服务器异常，尝试重启...")
+                    await restart_rtsp_server()
+                
+                # 检查 AI 处理器
+                if not is_ai_processor_healthy():
+                    logger.warning("AI 处理器异常，尝试重启...")
+                    await restart_ai_processor()
+                    
+                # 检查内存使用情况
+                memory_info = psutil.virtual_memory()
+                if memory_info.percent > 90:  # 内存使用超过 90%
+                    logger.warning("内存使用率过高，执行清理...")
+                    await perform_memory_cleanup()
+                    
+            except Exception as e:
+                logger.error(f"监视器执行过程中发生错误: {e}", exc_info=True)
+                
+            # 等待下一次检查
+            await asyncio.sleep(self.check_interval)
+```
+
+#### **2. 细粒度日志与诊断**
+
+实现更详细的日志系统，便于问题排查：
+
+```python
+class DiagnosticLogger:
+    """增强版日志记录器，支持细粒度诊断信息"""
+    
+    def __init__(self, log_dir: str, max_file_size_mb: int = 10):
+        self.log_dir = log_dir
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # 配置 loguru
+        logger.remove()  # 移除默认处理器
+        
+        # 添加控制台处理器 (info 级别)
+        logger.add(sys.stderr, level="INFO")
+        
+        # 添加文件处理器 (debug 级别，按大小轮转)
+        logger.add(
+            os.path.join(log_dir, "app.log"),
+            rotation=f"{max_file_size_mb} MB",
+            retention=10,
+            level="DEBUG",
+            backtrace=True,
+            diagnose=True
+        )
+        
+        # 单独的错误日志文件
+        logger.add(
+            os.path.join(log_dir, "error.log"),
+            rotation=f"{max_file_size_mb} MB",
+            retention=10,
+            level="ERROR",
+            backtrace=True,
+            diagnose=True
+        )
+        
+        # 性能日志
+        logger.add(
+            os.path.join(log_dir, "perf.log"),
+            rotation=f"{max_file_size_mb} MB",
+            filter=lambda record: "perf" in record["extra"],
+            level="DEBUG"
+        )
+        
+    def log_performance_metrics(self, metrics: Dict[str, Any]):
+        """记录性能指标"""
+        logger.bind(perf=True).debug(f"性能指标: {metrics}")
+        
+    def log_system_health(self, health_status: Dict[str, Any]):
+        """记录系统健康状态"""
+        if all(health_status.values()):
+            logger.bind(perf=True).info("系统健康检查: 所有组件正常")
+        else:
+            unhealthy_components = [k for k, v in health_status.items() if not v]
+            logger.warning(f"系统健康检查: 异常组件 {unhealthy_components}")
+```
+
+### **用户体验增强**
+
+#### **1. 多通道 WebSocket**
+
+为不同类型的数据提供专用 WebSocket 通道：
+
+```python
+# 多通道 WebSocket 路由
+
+@router.websocket("/ws/detection")
+async def detection_websocket(websocket: WebSocket):
+    """用于实时检测结果的 WebSocket"""
+    await websocket_managers["detection"].connect(websocket)
+    try:
+        # ... 处理检测数据 WebSocket 连接 ...
+        pass
+    except WebSocketDisconnect:
+        websocket_managers["detection"].disconnect(websocket)
+
+@router.websocket("/ws/status")
+async def status_websocket(websocket: WebSocket):
+    """用于系统状态更新的 WebSocket"""
+    await websocket_managers["status"].connect(websocket)
+    try:
+        # ... 处理状态更新 WebSocket 连接 ...
+        pass
+    except WebSocketDisconnect:
+        websocket_managers["status"].disconnect(websocket)
+
+@router.websocket("/ws/control")
+async def control_websocket(websocket: WebSocket):
+    """用于接收控制命令的 WebSocket"""
+    await websocket_managers["control"].connect(websocket)
+    try:
+        # ... 处理控制命令 WebSocket 连接 ...
+        pass
+    except WebSocketDisconnect:
+        websocket_managers["control"].disconnect(websocket)
+```
+
+#### **2. 客户端数据过滤**
+
+允许客户端指定所需的数据类型，减少不必要的数据传输：
+
+```python
+@router.websocket("/ws/filtered")
+async def filtered_websocket(
+    websocket: WebSocket,
+    confidence: float = Query(0.5),
+    classes: str = Query("all"),
+    max_fps: float = Query(10.0)
+):
+    """允许客户端过滤数据的 WebSocket"""
+    # 解析过滤参数
+    filter_classes = classes.split(',') if classes != "all" else None
+    
+    # 创建客户端过滤器
+    client_filter = ClientFilter(
+        min_confidence=confidence,
+        allowed_classes=filter_classes,
+        max_fps=max_fps
+    )
+    
+    # 连接并处理
+    await websocket_manager.connect(websocket, filter=client_filter)
+    try:
+        # ... 处理连接 ...
+        pass
+    except WebSocketDisconnect:
+        websocket_manager.disconnect(websocket)
+```
+
+#### **3. 管理界面**
+
+添加 Web 管理界面，便于监控和配置系统：
+
+```python
+# 挂载静态文件服务器提供 Web 管理界面
+app.mount("/admin", StaticFiles(directory="static/admin", html=True), name="admin")
+
+# 实现管理 API
+@router.get("/api/admin/status")
+async def admin_status():
+    """获取系统状态信息，用于管理界面"""
+    return {
+        "rtsp_server": {
+            "running": is_rtsp_server_running(),
+            "clients": rtsp_server.get_client_count() if rtsp_server else 0,
+        },
+        "ai_processor": {
+            "running": is_ai_processor_running(),
+            "model_id": settings.ROBOFLOW_MODEL_ID,
+        },
+        "websocket": {
+            "connections": websocket_manager.connection_count,
+        },
+        "system": {
+            "cpu": psutil.cpu_percent(),
+            "memory": psutil.virtual_memory().percent,
+            "uptime": get_system_uptime(),
+        }
+    }
+
+@router.post("/api/admin/controls/restart/{component}")
+async def admin_restart_component(component: str):
+    """重启指定的系统组件"""
+    if component == "rtsp":
+        await restart_rtsp_server()
+        return {"status": "success", "message": "RTSP 服务器已重启"}
+    elif component == "ai":
+        await restart_ai_processor()
+        return {"status": "success", "message": "AI 处理器已重启"}
+    elif component == "all":
+        await restart_all_components()
+        return {"status": "success", "message": "所有组件已重启"}
+    else:
+        raise HTTPException(status_code=400, detail=f"未知组件: {component}")
+```
+
+### **部署与扩展性增强**
+
+#### **1. 分布式部署支持**
+
+为满足高负载需求，实现分布式部署架构：
+
+```plaintext
+                     [负载均衡器]
+                          │
+              ┌───────────┼───────────┐
+              │           │           │
+         [实例 1]      [实例 2]     [实例 3]
+              │           │           │
+              └───────────┼───────────┘
+                          │
+                     [Redis 消息队列]
+                          │
+              ┌───────────┼───────────┐
+              │           │           │
+        [AI 节点 1]   [AI 节点 2]  [AI 节点 3]
+```
+
+实现跨实例的消息分发：
+
+```python
+class DistributedMessageBroker:
+    """使用 Redis 的分布式消息代理"""
+    
+    def __init__(self, redis_url: str):
+        self.redis = aioredis.from_url(redis_url)
+        self.pubsub = self.redis.pubsub()
+        
+    async def publish(self, channel: str, message: Dict[str, Any]):
+        """发布消息到指定通道"""
+        await self.redis.publish(channel, json.dumps(message))
+        
+    async def subscribe(self, channel: str, callback: Callable):
+        """订阅指定通道的消息"""
+        await self.pubsub.subscribe(channel)
+        
+        # 在单独任务中处理消息
+        asyncio.create_task(self._message_handler(callback))
+        
+    async def _message_handler(self, callback: Callable):
+        """处理订阅消息"""
+        while True:
+            message = await self.pubsub.get_message(ignore_subscribe_messages=True)
+            if message:
+                try:
+                    data = json.loads(message["data"])
+                    await callback(data)
+                except Exception as e:
+                    logger.error(f"处理消息失败: {e}", exc_info=True)
+            
+            # 短暂等待，避免 CPU 占用过高
+            await asyncio.sleep(0.01)
+```
+
+#### **2. 容器编排与自动扩缩容**
+
+提供 Kubernetes 部署配置，支持自动扩缩容：
+
+```yaml
+# kubernetes/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rtsp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rtsp-server
+  template:
+    metadata:
+      labels:
+        app: rtsp-server
+    spec:
+      containers:
+      - name: rtsp-server
+        image: your-registry/rtsp-server:latest
+        ports:
+        - containerPort: 8000
+        - containerPort: 8765
+        - containerPort: 554
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        env:
+        - name: ROBOFLOW_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: rtsp-secrets
+              key: roboflow-api-key
+        - name: ENABLE_AI_PROCESSING
+          value: "true"
+        - name: DISTRIBUTED_MODE
+          value: "true"
+        - name: REDIS_URL
+          value: "redis://redis-service:6379"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 5
+```
+
+#### **3. 边缘部署优化**
+
+针对边缘设备优化部署配置，减少资源消耗：
+
+```python
+class EdgeOptimizedConfig(BaseConfig):
+    """针对边缘设备优化的配置"""
+    
+    # 减少 AI 推理频率
+    AI_INFERENCE_INTERVAL_MS: int = 200  # 每 200ms 推理一次，约 5 FPS
+    
+    # 降低分辨率处理
+    VIDEO_PROCESSING_WIDTH: int = 320
+    VIDEO_PROCESSING_HEIGHT: int = 240
+    
+    # 使用轻量级模型
+    ROBOFLOW_MODEL_ID: str = "next-level-edge/1"  # 假设有针对边缘设备优化的模型版本
+    
+    # 最小化日志
+    LOG_LEVEL: str = "WARNING"
+    
+    # 关闭不必要功能
+    ENABLE_VIDEO_RECORDING: bool = False
+    ENABLE_PERFORMANCE_METRICS: bool = False
+```
+
+通过这些未来的功能增强，系统将能够支持更复杂的应用场景，同时保持高性能和稳定性。
