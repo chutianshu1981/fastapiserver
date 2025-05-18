@@ -4,6 +4,10 @@ src/__pycache__/
 *.py[cod]
 *$py.class
 
+# Android app code base
+app_code_base/
+app_code_base/**
+
 .idx
 
 # C extensions

@@ -6,15 +6,17 @@
 - GET /videos: 获取视频列表
 - GET /video/{filename}: 获取指定视频
 - GET /health: 健康检查端点
+- WS /ws: WebSocket连接点，用于推送AI检测结果
 
 包含了请求限流、CORS支持、错误处理等功能。
 """
 from typing import Any, Dict, List, Optional, Callable, Coroutine
 import asyncio
 import time
+import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
@@ -28,10 +30,11 @@ from starlette.requests import Request
 from app.api.models import (
     StatusResponse, SnapshotResponse, VideoListResponse,
     HealthResponse, ErrorResponse, HealthStatus, ServerStatus,
-    ServerState, VideoInfo
+    ServerState, VideoInfo, AIDetectionResult, DetectionObject
 )
 from app.rtsp.server import RtspServer
 from app.services.video_service import VideoService
+from app.services.websocket_manager import manager as websocket_manager
 from app.core.logger import get_logger
 from app.core.config import get_settings, Settings
 
@@ -326,3 +329,39 @@ def setup_app(app: FastAPI) -> None:
     # 注册启动和关闭事件
     app.add_event_handler("startup", startup_event)
     app.add_event_handler("shutdown", shutdown_event)
+
+
+# WebSocket路由
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """
+    WebSocket端点，用于实时推送AI检测结果
+
+    客户端可以通过该端点接收实时AI检测结果
+    """
+    # 生成唯一客户端ID
+    client_id = str(uuid.uuid4())
+
+    try:
+        # 接受WebSocket连接
+        await websocket_manager.connect(websocket, client_id)
+        logger.info(f"客户端 {client_id} 已成功连接到WebSocket")
+
+        # 持续接收消息，以保持连接活跃
+        while True:
+            try:
+                data = await websocket.receive_text()
+                # 可以处理来自客户端的消息
+                # 这里简单地回显收到的消息
+                await websocket_manager.send_personal_message(
+                    {"type": "echo", "message": data},
+                    client_id
+                )
+            except WebSocketDisconnect:
+                logger.info(f"客户端 {client_id} 断开了WebSocket连接")
+                break
+    except Exception as e:
+        logger.error(f"WebSocket连接处理错误: {e}")
+    finally:
+        # 确保断开连接
+        await websocket_manager.disconnect(client_id)

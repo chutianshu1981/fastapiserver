@@ -28,9 +28,10 @@ dependencies = [
     "slowapi>=0.1.9",
     "numpy~=2.0.0",                 # 修改以兼容 inference==0.49.1
     "roboflow>=1.1.63",
-    "inference>=0.49.1",             # Roboflow inference
+    "inference>=0.49.5",             # Roboflow inference
     "supervision>=0.25.1",           # 用于视觉监控和性能分析
-    "pandas>=2.0.0"                  # 用于数据处理
+    "pandas>=2.0.0",                  # 用于数据处理
+    "loguru>=0.7.3"
 ]
 requires-python = ">=3.12,<3.13"  # 升级到 Python 3.12
 readme = "README.md"

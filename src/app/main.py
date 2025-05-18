@@ -5,6 +5,12 @@
 并处理应用的启动和关闭事件。
 '''
 
+from app.services import AIProcessor, manager as websocket_manager  # Import AIProcessor
+from app.utils.gstreamer_utils import create_and_setup_gstreamer_frame_producer
+from app.core.logger import setup_logging
+from app.core.config import get_settings
+from app.rtsp.server import RtspServer
+from app.api.routes import router as api_router, setup_app
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,24 +23,29 @@ import signal
 import os
 import json  # For logging AI predictions
 from typing import Dict, Any, Optional  # For type hinting
+import copy # 确保导入 copy 模块
+
+# 设置环境变量，避免matplotlib错误
+os.environ['MPLBACKEND'] = 'Agg'  # 使用非交互式后端
+# 如果环境变量中没有设置GST_DEBUG，则设置它
+if 'GST_DEBUG' not in os.environ:
+    os.environ['GST_DEBUG'] = 'avdec_h264:5,h264parse:5,rtph264depay:4,rtsp*:4,default:3'
+
+# 打印当前的GStreamer调试设置
+print(f"当前GStreamer调试级别: {os.environ.get('GST_DEBUG', '未设置')}")
 
 # 导入 GStreamer (确保来自系统安装)
 try:
     import gi
     gi.require_version('Gst', '1.0')
     gi.require_version('GstRtspServer', '1.0')
-    from gi.repository import GLib, Gst, GstRtspServer
+    from gi.repository import GLib, Gst, GstRtspServer # type: ignore
 except (ImportError, ValueError) as e:
     raise ImportError(
         f"无法加载 GStreamer 或 GstRtspServer: {e}. "
         f"请确保系统已安装必要的库和 Python 绑定。"
     )
 
-from .api.routes import router as api_router, setup_app
-from .rtsp.server import RtspServer
-from .core.config import get_settings
-from .core.logger import setup_logging
-from .services.ai_processor import AIProcessor  # Import AIProcessor
 
 # 配置日志
 logger = setup_logging()
@@ -84,7 +95,7 @@ def get_server_ip():
             s.close()
     except Exception as e:
         logger.error(f"获取服务器IP失败: {e}, 使用默认IP: 127.0.0.1")
-        return '127.0.0.1'
+        return '127.0.0.1'  # 使用localhost而不是0.0.0.0，因为AIProcessor需要连接到一个实际的IP
 
 
 # 启动主循环的后台任务
@@ -92,17 +103,20 @@ def run_rtsp_server_loop():
     try:
         # 启动RTSP服务器
         logger.info("启动RTSP服务器...")
-        rtsp_server.start()
-        logger.info(
-            f"RTSP 服务器已启动于 rtsp://0.0.0.0:{settings.RTSP_PORT}{settings.RTSP_PATH}")
+        if rtsp_server:
+            rtsp_server.start()
+            logger.info(
+                f"RTSP 服务器已启动于 rtsp://0.0.0.0:{settings.RTSP_PORT}{settings.RTSP_PATH}")
 
-        logger.info("主循环启动...")
-        mainloop.run()
+            logger.info("主循环启动...")
+            mainloop.run()
+        else:
+            logger.error("RTSP服务器实例未初始化，无法启动主循环。")
     except Exception as e:
         logger.error(f"运行主循环失败: {e}", exc_info=True)
     finally:
         # 确保停止RTSP服务器
-        if rtsp_server and rtsp_server.is_running:
+        if (rtsp_server and rtsp_server.is_running):
             rtsp_server.stop()
         logger.info("主循环已退出。")
 
@@ -182,14 +196,58 @@ async def shutdown_event():
 
 
 # 定义 AI 预测处理函数
-async def handle_ai_prediction(prediction_data: Dict[str, Any]):
+async def handle_ai_prediction(predictions_data: Dict[str, Any], frame_info: Dict[str, Any]):
     """
     处理 AIProcessor 预测结果的回调函数。
-    当前记录预测结果。稍后可以将数据发送给客户端。
+    将AI检测结果记录并通过WebSocket发送给所有连接的客户端。
     """
-    logger.info(
-        f"收到 AI 预测结果: {json.dumps(prediction_data, indent=2, ensure_ascii=False)}")
-    # TODO: 实现将数据发送给连接的客户端的逻辑（例如，通过 WebSocket）
+    logger.error("!!!!!!!!!! handle_ai_prediction CALLED !!!!!!!!!!") # 强制日志，确认函数调用
+    try:
+        frame_id = frame_info.get("frame_id", "N/A")
+        timestamp = frame_info.get("timestamp", "N/A")
+        
+        # 更详细地记录接收到的数据
+        logger.info(
+            f"主回调 handle_ai_prediction: 收到AI预测结果 (Frame ID: {frame_id}, Timestamp: {timestamp}), "
+            f"Predictions: {'[]' if not predictions_data else '有数据'}"
+        )
+        try:
+            # 尝试将 predictions_data 和 frame_info 序列化为 JSON 字符串进行记录
+            # 使用 copy.deepcopy 来避免修改原始数据，特别是如果它们是可变类型且后续仍需使用
+            predictions_data_log = copy.deepcopy(predictions_data)
+            frame_info_log = copy.deepcopy(frame_info)
+
+            # 对于 datetime 对象，需要特殊处理才能 JSON 序列化
+            if isinstance(frame_info_log.get("timestamp"), datetime):
+                frame_info_log["timestamp"] = frame_info_log["timestamp"].isoformat()
+            
+            logger.info(f"  Raw Frame Info: {frame_info_log}") # 直接记录原始 frame_info
+            logger.info(f"  Raw Predictions Data Type: {type(predictions_data_log)}")
+            logger.info(f"  Raw Predictions Data: {predictions_data_log}") # 直接记录原始 predictions_data
+
+            # # 下面这两行可以帮助查看详细的JSON结构，如果直接打印不清晰
+            # logger.info(f"  Frame Info (JSON): {json.dumps(frame_info_log, indent=2, default=str)}")
+            # logger.info(f"  Predictions Data (JSON): {json.dumps(predictions_data_log, indent=2, default=str)}")
+
+        except Exception as log_e:
+            logger.error(f"主回调 handle_ai_prediction: 记录predictions_data或frame_info时出错: {log_e}")
+
+        # 构造发送给客户端的数据
+        websocket_payload = {
+            "frame_id": frame_id,
+            "timestamp": str(timestamp), # 确保时间戳是可序列化的
+            "predictions": predictions_data,
+            "image_shape": frame_info.get("image_shape")
+        }
+
+        # # 暂时注释掉WebSocket广播，以隔离问题
+        # await websocket_manager.broadcast_ai_result(websocket_payload)
+        # logger.debug(f"主回调 handle_ai_prediction: 已广播 Frame ID {frame_id} 的AI结果。")
+        logger.warning("主回调 handle_ai_prediction: WebSocket广播已临时禁用。")
+
+
+    except Exception as e:
+        logger.error(f"主回调 handle_ai_prediction 处理AI预测结果错误: {e}", exc_info=True)
 
 
 @asynccontextmanager
@@ -204,7 +262,14 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing RTSPServer...")
     rtsp_server = RtspServer()  # Corrected: No arguments passed to constructor
     logger.info("RTSPServer instance created.")
-    # 注意: rtsp_server.start() 在 run_rtsp_server_loop 中调用
+
+    # --- 提前初始化帧队列 ---
+    import queue
+    # 这个 frame_queue 实例将被 RtspServer 和 GStreamerFrameProducer 共享
+    shared_frame_queue = queue.Queue(maxsize=30) # 限制队列大小
+    rtsp_server.frame_queue = shared_frame_queue # 在服务器启动前设置队列
+    logger.info("为RTSP服务器创建并设置了帧队列 (早期初始化)")
+    # --- 帧队列初始化完毕 ---
 
     logger.info("正在启动 RTSP 服务器线程...")
     rtsp_thread = threading.Thread(target=run_rtsp_server_loop, daemon=True)
@@ -212,16 +277,31 @@ async def lifespan(app: FastAPI):
     logger.info("RTSP 服务器线程已启动")
 
     # 允许 RTSP 服务器启动前 AI 连接的时间
-    await asyncio.sleep(2)  # 短暂延迟
+    logger.info("等待 RTSP 服务器完全启动...")
+    await asyncio.sleep(5)  # 延长延迟，确保RTSP服务器完全启动
 
     # 初始化并启动 AIProcessor
-    rtsp_stream_url_for_ai = f"rtsp://127.0.0.1:{settings.RTSP_PORT}{settings.RTSP_PATH}"
+    server_ip = get_server_ip()  # 使用实际服务器IP
+    rtsp_stream_url_for_ai = f"rtsp://{server_ip}:{settings.RTSP_PORT}{settings.RTSP_PATH}"
     logger.info(f"使用 RTSP URL 初始化 AIProcessor: {rtsp_stream_url_for_ai}")
 
     try:
+        # 创建GStreamerFrameProducer
+        from app.services.gstreamer_frame_producer import GStreamerFrameProducer
+        frame_producer = GStreamerFrameProducer(
+            frame_queue=shared_frame_queue,  # 确保使用上面创建的同一个队列实例
+            fps=30.0,  # 假设的帧率
+            width=640,  # 默认宽度
+            height=480  # 默认高度
+        )
+        logger.info(f"已创建GStreamerFrameProducer，使用默认分辨率640x480，帧率30.0")
+
+        # 创建AIProcessor
         ai_processor = AIProcessor(
-            rtsp_url=rtsp_stream_url_for_ai,
-            on_prediction_callback=handle_ai_prediction
+            model_id=settings.ROBOFLOW_MODEL_ID,
+            on_prediction_callback=handle_ai_prediction,
+            api_key=settings.ROBOFLOW_API_KEY,
+            frame_producer=frame_producer
         )
         logger.info("AIProcessor 实例已创建。正在启动 AI 处理任务...")
         ai_processor_task = asyncio.create_task(ai_processor.start())

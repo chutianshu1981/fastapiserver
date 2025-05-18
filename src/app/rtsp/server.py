@@ -14,6 +14,7 @@ import os
 import gi
 import time
 import threading
+import queue
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable, cast
@@ -53,6 +54,9 @@ class RtspServer:
         # For /push endpoint processing
         self.push_appsink: Optional[Gst.Element] = None
 
+        # 帧队列 - 用于存储从appsink获取的帧，供AI处理使用
+        self.frame_queue: Optional[queue.Queue] = None
+
         # Roboflow model (placeholder - initialize appropriately)
         # self.roboflow_model = None
         # Example:
@@ -74,11 +78,11 @@ class RtspServer:
             str: Pipeline 描述字符串
         """
         logger.info(
-            "创建 /push 推流端点管道 (rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! video/x-raw,format=BGR ! appsink)")
+            "创建 /push 推流端点管道 (rtph264depay ! h264parse config-interval=-1 ! avdec_h264 ! videoconvert ! video/x-raw,format=BGR ! appsink)")
         # 此管道将解码H264并输出BGR原始视频帧到 appsink
         pipeline = (
             "rtph264depay name=depay0 ! "
-            "h264parse name=parse0 ! "
+            "h264parse name=parse0 config-interval=-1 ! "  # 添加 config-interval=-1
             "avdec_h264 ! "  # 解码 H264
             "videoconvert ! "  # 转换颜色空间
             "video/x-raw,format=BGR ! "  # 指定输出BGR格式
@@ -244,28 +248,35 @@ class RtspServer:
                 buffer=map_info.data,
                 dtype=np.uint8
             )
-            # 复制数据，因为 unmap 后 map_info.data 将失效
-            frame_for_roboflow = frame_data.copy()
+            
+            # --- 将帧数据和时间戳放入队列 ---
+            if self.frame_queue is not None:
+                try:
+                    # 强制使用当前时间的纳秒级 Epoch 时间戳
+                    gst_timestamp_ns = int(time.time() * 1_000_000_000)
+
+                    # 创建一个 frame_data 的深拷贝，因为 buffer 将被 GStreamer 回收
+                    frame_to_queue = np.copy(frame_data)
+                    self.frame_queue.put((frame_to_queue, gst_timestamp_ns), block=False)
+                    logger.debug(f"Frame (shape: {frame_to_queue.shape}, pts_ns: {gst_timestamp_ns}) put into queue. Queue size: {self.frame_queue.qsize()}")
+                except queue.Full:
+                    logger.warning(
+                        f"[{timestamp}] Frame queue is full. Dropping frame from {appsink.get_name()}. "
+                        f"Queue size: {self.frame_queue.qsize()}"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"[{timestamp}] Error putting frame to queue from {appsink.get_name()}: {e}", exc_info=True)
+            else:
+                logger.warning(
+                    f"[{timestamp}] Frame queue is not initialized in RtspServer. Cannot put frame from {appsink.get_name()}.")
+            # ------------------------------------
+
         finally:
             buffer.unmap(map_info)  # 确保 unmap 操作在 try/finally 中
 
         # logger.debug( # 可以按需开启此日志
         #     f"[{timestamp}] Converted Gst.Buffer to NumPy array for Roboflow. Shape: {frame_for_roboflow.shape}")
-
-        # TODO: 在此处集成 Roboflow SDK，使用 'frame_for_roboflow' (NumPy 数组)
-        # 示例 (确保 self.roboflow_model 已在 __init__ 或 start 中初始化):
-        # if hasattr(self, 'roboflow_model') and self.roboflow_model:
-        #     try:
-        #         # Roboflow SDK 可能需要 BGR 格式的 NumPy 数组
-        #         # results = self.roboflow_model.predict(frame_for_roboflow).json()
-        #         # logger.info(f"[{timestamp}] Roboflow analysis: {results}")
-        #         # TODO: 将结果发送回 Android 客户端 (这需要额外的机制，例如 WebSocket 或 HTTP 回调)
-        #         pass # Roboflow 实际调用的占位符
-        #     except Exception as e:
-        #         logger.error(f"[{timestamp}] Roboflow inference failed: {e}", exc_info=True)
-        # else:
-        #     logger.warning(f"[{timestamp}] Roboflow model not initialized. Skipping inference.")
-        # --- Roboflow 集成准备结束 ---
 
         return Gst.FlowReturn.OK  # 表示样本已成功处理
 
@@ -334,22 +345,32 @@ class RtspServer:
             return
 
         try:
+            logger.info("开始创建RTSP服务器实例...")
             self.server = cast(GstRtspServer.RTSPServer,
                                GstRtspServer.RTSPServer.new())
             if self.server is None:
                 raise RuntimeError("无法创建 RTSP 服务器")
 
+            logger.info(f"设置RTSP服务器端口: {self.settings.RTSP_PORT}")
             self.server.set_service(str(self.settings.RTSP_PORT))
+
+            logger.info("设置媒体工厂...")
             self._setup_media_factories()  # 只设置 /push
+
+            logger.info("获取挂载点...")
             mount_points = self.server.get_mount_points()
             if mount_points is None:
                 raise RuntimeError("无法获取挂载点")
 
             # 仅挂载 /push 端点
+            logger.info("添加 /push 端点到挂载点...")
             mount_points.add_factory(
                 "/push", cast(GstRtspServer.RTSPMediaFactory, self.push_factory))
 
+            logger.info("连接客户端连接回调...")
             self.server.connect('client-connected', self._on_client_connected)
+
+            logger.info("将服务器附加到主上下文...")
             self.server.attach(None)
             logger.info(
                 f"RTSP 服务器启动:\n"
@@ -357,14 +378,21 @@ class RtspServer:
             )
 
             self._running = True
+
+            logger.info("创建GLib主循环...")
             self.mainloop = GLib.MainLoop()
             if self.mainloop is None:
                 raise RuntimeError("无法创建主循环")
 
+            logger.info("启动GLib主循环线程...")
             self._mainloop_thread = threading.Thread(
                 target=self.mainloop.run, daemon=True)
             self._mainloop_thread.start()
+
+            logger.info("等待主循环启动...")
             time.sleep(1)  # 给主循环一点时间启动
+
+            logger.info("RTSP服务器已完全启动并运行")
 
         except Exception as e:
             logger.error(f"启动 RTSP 服务器失败: {str(e)}", exc_info=True)

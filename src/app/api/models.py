@@ -85,3 +85,23 @@ class ErrorResponse(BaseModel):
     code: int = Field(..., description="错误代码")
     timestamp: datetime = Field(
         default_factory=datetime.now, description="错误时间戳")
+
+
+class DetectionObject(BaseModel):
+    """检测到的对象模型"""
+    class_name: str = Field(..., description="对象类别名称")
+    confidence: float = Field(..., description="置信度", ge=0.0, le=1.0)
+    x_center: float = Field(..., description="对象中心点X坐标(相对于图像宽度)")
+    y_center: float = Field(..., description="对象中心点Y坐标(相对于图像高度)")
+    width: float = Field(..., description="对象宽度(相对于图像宽度)")
+    height: float = Field(..., description="对象高度(相对于图像高度)")
+
+
+class AIDetectionResult(BaseModel):
+    """AI检测结果模型"""
+    frame_id: int = Field(..., description="帧ID")
+    timestamp: int = Field(..., description="时间戳(毫秒)")
+    fps: float = Field(..., description="当前处理帧率")
+    detections: List[DetectionObject] = Field(
+        default_factory=list, description="检测到的对象列表")
+    error: Optional[str] = Field(None, description="错误信息(如果有)")

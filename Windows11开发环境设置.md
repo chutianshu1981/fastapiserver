@@ -234,6 +234,10 @@
 gst-launch-1.0 playbin uri=rtsp://192.168.31.102:8554/live
 
  eval $(pdm venv activate)    
+
+ export GST_DEBUG=3,GstRtspServer:4,rtsp*:4,rtspsrc:4,udpsrc:4
+
+ pdm run uvicorn app.main:app --reload --port 58000   
 ```
 
 https://inference.roboflow.com/using_inference/inference_pipeline/#migrate-to-changes-introduced-in-v0918

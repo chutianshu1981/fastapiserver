@@ -41,10 +41,10 @@
 - **Running the Application**:
     - How to start the Flask server (e.g., `pdm run start`).
     - How to run any Gstreamer-related standalone processes or scripts, if applicable.
-    - Default ports and URLs (e.g., `http://localhost:5000/push`, `http://localhost:5000/live`).
+    - Default ports and URLs (e.g., `http://localhost:8554/push`).
 - **Key Features & Endpoints**:
     - List main features.
-    - Briefly describe important API endpoints like `/push` and `/live`, including expected input and output.
+    - Briefly describe important API endpoints like `/push`, including expected input and output.
 - **Directory Structure**: A brief explanation of the project's directory layout (e.g., `src/app`, `src/app/api`, `src/app/rtsp`).
 - **Troubleshooting**: Common issues and their solutions (e.g., Gstreamer pipeline errors, port conflicts).
 - **Contribution Guidelines**: (Optional, but good for team projects) How to contribute, coding standards, pull request process.
