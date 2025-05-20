@@ -45,7 +45,8 @@ class GStreamerFrameProducer(VideoFrameProducer):
         self._last_read_video_frame: Optional[VideoFrame] = None
         self._last_retrieved_frame_id: Optional[int] = None
         self._last_retrieved_frame_timestamp: Optional[datetime] = None
-        logger.info(f"GStreamerFrameProducer initialized. Queue: {frame_queue is not None}, FPS: {fps}, Resolution: {width}x{height}")
+        logger.info(
+            f"GStreamerFrameProducer initialized. Queue: {frame_queue is not None}, FPS: {fps}, Resolution: {width}x{height}")
 
     def start(self):
         """开始帧生产过程"""
@@ -66,10 +67,10 @@ class GStreamerFrameProducer(VideoFrameProducer):
         try:
             # 从队列中获取(numpy_array, timestamp_ns)元组
             # logger.debug(f"GStreamerFrameProducer: Attempting to get frame from queue (current size: {self.frame_queue.qsize()})")
-            
+
             # 使用 timeout 来避免无限阻塞，并允许检查 self.running 状态
-            numpy_frame, timestamp_ns = self.frame_queue.get(timeout=1.0) 
-            
+            numpy_frame, timestamp_ns = self.frame_queue.get(timeout=1.0)
+
             # logger.info(f"GStreamerFrameProducer: Frame obtained from queue. Timestamp_ns: {timestamp_ns}")
 
             self.frame_id_counter += 1
@@ -77,18 +78,21 @@ class GStreamerFrameProducer(VideoFrameProducer):
 
             if timestamp_ns is not None:
                 try:
-                    current_timestamp_dt = datetime.fromtimestamp(timestamp_ns / 1_000_000_000)
+                    current_timestamp_dt = datetime.fromtimestamp(
+                        timestamp_ns / 1_000_000_000)
                     # logger.debug(f"GStreamerFrameProducer: Converted timestamp_ns {timestamp_ns} to datetime {current_timestamp_dt.isoformat()}")
                 except Exception as e:
-                    logger.error(f"GStreamerFrameProducer: Error converting timestamp_ns {timestamp_ns} to datetime: {e}. Falling back to current time.")
-                    current_timestamp_dt = datetime.now() # Fallback
+                    logger.error(
+                        f"GStreamerFrameProducer: Error converting timestamp_ns {timestamp_ns} to datetime: {e}. Falling back to current time.")
+                    current_timestamp_dt = datetime.now()  # Fallback
             else:
-                logger.warning("GStreamerFrameProducer: timestamp_ns is None. Falling back to current time for VideoFrame.")
-                current_timestamp_dt = datetime.now() # Fallback
+                logger.warning(
+                    "GStreamerFrameProducer: timestamp_ns is None. Falling back to current time for VideoFrame.")
+                current_timestamp_dt = datetime.now()  # Fallback
 
             # 创建VideoFrame对象，移除无效参数
             video_frame = VideoFrame(
-                image=np.copy(numpy_frame), # 确保传递图像数据的副本
+                image=np.copy(numpy_frame),  # 确保传递图像数据的副本
                 frame_id=self.frame_id_counter,
                 frame_timestamp=current_timestamp_dt,
                 source_id=self._source_id
@@ -102,16 +106,18 @@ class GStreamerFrameProducer(VideoFrameProducer):
             # logger.debug("GStreamerFrameProducer.read_frame(): Frame queue is empty (timeout).")
             return None
         except Exception as e:
-            logger.error(f"GStreamerFrameProducer.read_frame(): Exception while reading frame: {e}", exc_info=True)
+            logger.error(
+                f"GStreamerFrameProducer.read_frame(): Exception while reading frame: {e}", exc_info=True)
             return None
 
     def release(self):
         logger.info("GStreamerFrameProducer.release() CALLED BY PIPELINE.")
         # 对于一个期望持续接收推流的源，我们不在此处将 self.running 置为 False。
         # InferencePipeline 可能会在 grab 失败后调用 release，但我们希望它能重试。
-        # self.running = False 
-        logger.info(f"GStreamerFrameProducer.release(): Kept running state as {self.running} for persistent push source.")
-        
+        # self.running = False
+        logger.info(
+            f"GStreamerFrameProducer.release(): Kept running state as {self.running} for persistent push source.")
+
         # 清理队列中的所有剩余帧
         logger.info("GStreamerFrameProducer.release(): Clearing frame queue...")
         cleared_count = 0
@@ -122,9 +128,11 @@ class GStreamerFrameProducer(VideoFrameProducer):
             except queue.Empty:
                 break
             except Exception as e:
-                logger.error(f"GStreamerFrameProducer.release(): Error clearing queue item: {e}")
-                break # Stop if error during clearing
-        logger.info(f"GStreamerFrameProducer.release(): Frame queue cleared. {cleared_count} items removed.")
+                logger.error(
+                    f"GStreamerFrameProducer.release(): Error clearing queue item: {e}")
+                break  # Stop if error during clearing
+        logger.info(
+            f"GStreamerFrameProducer.release(): Frame queue cleared. {cleared_count} items removed.")
 
     def get_fps(self) -> Optional[float]:
         """获取视频帧率"""
@@ -135,7 +143,8 @@ class GStreamerFrameProducer(VideoFrameProducer):
         return (self._width, self._height)
 
     def isOpened(self) -> bool:
-        logger.info(f"GStreamerFrameProducer.isOpened() called, running={self.running}")
+        logger.info(
+            f"GStreamerFrameProducer.isOpened() called, running={self.running}")
         return self.running
 
     def grab(self) -> bool:
@@ -143,43 +152,52 @@ class GStreamerFrameProducer(VideoFrameProducer):
         从队列中抓取并处理一帧，将其存储以供 retrieve() 方法后续检索。
         """
         if not self.running:
-            logger.warning("GStreamerFrameProducer.grab(): Producer not running.")
+            logger.warning(
+                "GStreamerFrameProducer.grab(): Producer not running.")
             return False
         try:
-            video_frame_obj = self.read_frame()
+            video_frame_obj = self.read_frame()  # read_frame internally gets from queue
             if video_frame_obj is not None:
                 self._last_read_video_frame = video_frame_obj
-                logger.debug(f"GStreamerFrameProducer.grab(): Successfully grabbed frame ID: {video_frame_obj.frame_id}, Timestamp: {video_frame_obj.frame_timestamp}")
+                # 使用 logger.info 或 logger.debug，取决于你希望的日志级别
+                logger.info(
+                    f"GStreamerFrameProducer.grab(): Successfully grabbed frame ID: {video_frame_obj.frame_id}, Timestamp: {video_frame_obj.frame_timestamp}. Queue size after get: {self.frame_queue.qsize()}")
                 return True
             else:
                 self._last_read_video_frame = None
-                logger.debug("GStreamerFrameProducer.grab(): read_frame() returned None, grab failed.")
+                logger.debug(
+                    "GStreamerFrameProducer.grab(): read_frame() returned None, grab failed.")
                 return False
         except Exception as e:
-            logger.error(f"GStreamerFrameProducer.grab(): Exception while grabbing frame: {e}", exc_info=True)
+            logger.error(
+                f"GStreamerFrameProducer.grab(): Exception while grabbing frame: {e}", exc_info=True)
             self._last_read_video_frame = None
             return False
 
     def retrieve(self) -> tuple[bool, Optional[np.ndarray]]:
         if hasattr(self, '_last_read_video_frame') and self._last_read_video_frame is not None:
             image_to_return = self._last_read_video_frame.image
-            
+
             self._last_retrieved_frame_id = self._last_read_video_frame.frame_id
             self._last_retrieved_frame_timestamp = self._last_read_video_frame.frame_timestamp
-            
+
             frame_id_log = self._last_retrieved_frame_id
-            frame_timestamp_log = self._last_retrieved_frame_timestamp.isoformat() if self._last_retrieved_frame_timestamp else 'None'
+            frame_timestamp_log = self._last_retrieved_frame_timestamp.isoformat(
+            ) if self._last_retrieved_frame_timestamp else 'None'
 
             self._last_read_video_frame = None
-            
+
             if image_to_return is not None:
-                logger.info(f"GStreamerFrameProducer.retrieve(): Returning image (shape: {image_to_return.shape}) for Frame ID: {frame_id_log}, Timestamp: {frame_timestamp_log}. Metadata cached.")
+                logger.info(
+                    f"GStreamerFrameProducer.retrieve(): Returning image (shape: {image_to_return.shape}) for Frame ID: {frame_id_log}, Timestamp: {frame_timestamp_log}. Metadata cached.")
                 return True, image_to_return
             else:
-                logger.warning(f"GStreamerFrameProducer.retrieve(): Stored VideoFrame (ID: {frame_id_log}) had None image. Metadata cached.")
+                logger.warning(
+                    f"GStreamerFrameProducer.retrieve(): Stored VideoFrame (ID: {frame_id_log}) had None image. Metadata cached.")
                 return False, None
         else:
-            logger.debug("GStreamerFrameProducer.retrieve(): No frame available to retrieve (self._last_read_video_frame is None).")
+            logger.debug(
+                "GStreamerFrameProducer.retrieve(): No frame available to retrieve (self._last_read_video_frame is None).")
             return False, None
 
     def get_frame_id(self) -> Optional[int]:

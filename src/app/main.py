@@ -23,7 +23,7 @@ import signal
 import os
 import json  # For logging AI predictions
 from typing import Dict, Any, Optional  # For type hinting
-import copy # 确保导入 copy 模块
+import copy  # 确保导入 copy 模块
 
 # 设置环境变量，避免matplotlib错误
 os.environ['MPLBACKEND'] = 'Agg'  # 使用非交互式后端
@@ -39,7 +39,7 @@ try:
     import gi
     gi.require_version('Gst', '1.0')
     gi.require_version('GstRtspServer', '1.0')
-    from gi.repository import GLib, Gst, GstRtspServer # type: ignore
+    from gi.repository import GLib, Gst, GstRtspServer  # type: ignore
 except (ImportError, ValueError) as e:
     raise ImportError(
         f"无法加载 GStreamer 或 GstRtspServer: {e}. "
@@ -64,7 +64,7 @@ rtsp_thread = None
 periodic_task = None
 rtsp_server: Optional[RtspServer] = None  # Add type hint
 ai_processor: Optional[AIProcessor] = None
-ai_processor_task: Optional[asyncio.Task] = None
+FF: Optional[asyncio.Task] = None
 
 
 # 获取服务器IP地址
@@ -201,11 +201,12 @@ async def handle_ai_prediction(predictions_data: Dict[str, Any], frame_info: Dic
     处理 AIProcessor 预测结果的回调函数。
     将AI检测结果记录并通过WebSocket发送给所有连接的客户端。
     """
-    logger.error("!!!!!!!!!! handle_ai_prediction CALLED !!!!!!!!!!") # 强制日志，确认函数调用
+    logger.error(
+        "!!!!!!!!!! handle_ai_prediction CALLED !!!!!!!!!!")  # 强制日志，确认函数调用
     try:
         frame_id = frame_info.get("frame_id", "N/A")
         timestamp = frame_info.get("timestamp", "N/A")
-        
+
         # 更详细地记录接收到的数据
         logger.info(
             f"主回调 handle_ai_prediction: 收到AI预测结果 (Frame ID: {frame_id}, Timestamp: {timestamp}), "
@@ -220,22 +221,26 @@ async def handle_ai_prediction(predictions_data: Dict[str, Any], frame_info: Dic
             # 对于 datetime 对象，需要特殊处理才能 JSON 序列化
             if isinstance(frame_info_log.get("timestamp"), datetime):
                 frame_info_log["timestamp"] = frame_info_log["timestamp"].isoformat()
-            
-            logger.info(f"  Raw Frame Info: {frame_info_log}") # 直接记录原始 frame_info
-            logger.info(f"  Raw Predictions Data Type: {type(predictions_data_log)}")
-            logger.info(f"  Raw Predictions Data: {predictions_data_log}") # 直接记录原始 predictions_data
+
+            # 直接记录原始 frame_info
+            logger.info(f"  Raw Frame Info: {frame_info_log}")
+            logger.info(
+                f"  Raw Predictions Data Type: {type(predictions_data_log)}")
+            # 直接记录原始 predictions_data
+            logger.info(f"  Raw Predictions Data: {predictions_data_log}")
 
             # # 下面这两行可以帮助查看详细的JSON结构，如果直接打印不清晰
             # logger.info(f"  Frame Info (JSON): {json.dumps(frame_info_log, indent=2, default=str)}")
             # logger.info(f"  Predictions Data (JSON): {json.dumps(predictions_data_log, indent=2, default=str)}")
 
         except Exception as log_e:
-            logger.error(f"主回调 handle_ai_prediction: 记录predictions_data或frame_info时出错: {log_e}")
+            logger.error(
+                f"主回调 handle_ai_prediction: 记录predictions_data或frame_info时出错: {log_e}")
 
         # 构造发送给客户端的数据
         websocket_payload = {
             "frame_id": frame_id,
-            "timestamp": str(timestamp), # 确保时间戳是可序列化的
+            "timestamp": str(timestamp),  # 确保时间戳是可序列化的
             "predictions": predictions_data,
             "image_shape": frame_info.get("image_shape")
         }
@@ -245,29 +250,29 @@ async def handle_ai_prediction(predictions_data: Dict[str, Any], frame_info: Dic
         # logger.debug(f"主回调 handle_ai_prediction: 已广播 Frame ID {frame_id} 的AI结果。")
         logger.warning("主回调 handle_ai_prediction: WebSocket广播已临时禁用。")
 
-
     except Exception as e:
-        logger.error(f"主回调 handle_ai_prediction 处理AI预测结果错误: {e}", exc_info=True)
+        logger.error(
+            f"主回调 handle_ai_prediction 处理AI预测结果错误: {e}", exc_info=True)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
+    """FASTAPI APP 应用生命周期管理"""
     global rtsp_thread, periodic_task, rtsp_server, ai_processor, ai_processor_task
     # 启动
-    logger.info("应用启动，正在初始化...")
+    logger.info("FASTAPI 应用启动，正在初始化...")
     os.makedirs(settings.OUTPUT_DIR, exist_ok=True)
 
     # 初始化 RTSP 服务器实例
-    logger.info("Initializing RTSPServer...")
+    logger.info("初始化 RTSPServer...")
     rtsp_server = RtspServer()  # Corrected: No arguments passed to constructor
-    logger.info("RTSPServer instance created.")
+    logger.info("RTSPServer 实例已创建.")
 
     # --- 提前初始化帧队列 ---
     import queue
     # 这个 frame_queue 实例将被 RtspServer 和 GStreamerFrameProducer 共享
-    shared_frame_queue = queue.Queue(maxsize=30) # 限制队列大小
-    rtsp_server.frame_queue = shared_frame_queue # 在服务器启动前设置队列
+    shared_frame_queue = queue.Queue(maxsize=30)  # 限制队列大小
+    rtsp_server.frame_queue = shared_frame_queue  # 在服务器启动前设置队列
     logger.info("为RTSP服务器创建并设置了帧队列 (早期初始化)")
     # --- 帧队列初始化完毕 ---
 
@@ -290,11 +295,11 @@ async def lifespan(app: FastAPI):
         from app.services.gstreamer_frame_producer import GStreamerFrameProducer
         frame_producer = GStreamerFrameProducer(
             frame_queue=shared_frame_queue,  # 确保使用上面创建的同一个队列实例
-            fps=30.0,  # 假设的帧率
+            fps=10.0,  # 假设的帧率
             width=640,  # 默认宽度
             height=480  # 默认高度
         )
-        logger.info(f"已创建GStreamerFrameProducer，使用默认分辨率640x480，帧率30.0")
+        logger.info(f"已创建GStreamerFrameProducer，使用默认分辨率640x480，帧率10.0")
 
         # 创建AIProcessor
         ai_processor = AIProcessor(
@@ -316,7 +321,6 @@ async def lifespan(app: FastAPI):
     logger.info("定期任务已启动。")
     logger.info("应用启动完成。")
 
-    server_ip = get_server_ip()
     logger.info(
         f"RTSP 服务器地址: rtsp://{server_ip}:{settings.RTSP_PORT}{settings.RTSP_PATH}")
     logger.info(f"FastAPI 服务器运行在: http://{server_ip}:{settings.API_PORT}")

@@ -50,7 +50,11 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = Field(default="INFO", description="日志级别")
     LOG_FORMAT: str = Field(
         default="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        description="日志格式"
+        description="基本日志格式"
+    )
+    CONSOLE_LOG_FORMAT: str = Field(
+        default="%(asctime)s - #%(process)d - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s",
+        description="控制台日志格式，自动添加行号"
     )
 
     model_config = SettingsConfigDict(

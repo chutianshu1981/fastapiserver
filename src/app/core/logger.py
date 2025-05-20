@@ -13,6 +13,23 @@ from typing import Optional, Dict, Any
 
 from .config import get_settings
 
+# 全局行号计数器
+
+
+class LineNumberingFormatter(logging.Formatter):
+    """在日志消息前添加行号的格式化器"""
+
+    line_counter = 0
+
+    def format(self, record):
+        """格式化日志记录，添加行号"""
+        LineNumberingFormatter.line_counter += 1
+        # 使用 Formatter 的 format 方法处理记录
+        formatted_message = super().format(record)
+        # 在日志消息前添加行号
+        return f"{LineNumberingFormatter.line_counter} - {formatted_message}"
+
+
 # 日志级别映射
 LOG_LEVELS = {
     "DEBUG": logging.DEBUG,
@@ -51,7 +68,8 @@ def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
     # 创建控制台处理程序
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(log_level)
-    console_formatter = logging.Formatter(settings.LOG_FORMAT)
+    # 使用自定义格式化器添加行号
+    console_formatter = LineNumberingFormatter(settings.CONSOLE_LOG_FORMAT)
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
 
@@ -59,7 +77,7 @@ def setup_logging(log_file: Optional[Path] = None) -> logging.Logger:
     if log_file:
         # 确保日志目录存在
         log_file.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # 使用循环日志文件处理程序，每个文件最大 10MB，保留 5 个备份
         file_handler = RotatingFileHandler(
             log_file,
