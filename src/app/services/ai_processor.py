@@ -17,14 +17,13 @@ from queue import Queue
 import time
 from typing import Any, Callable, Coroutine, Dict, Optional, List, Tuple, cast, Union
 from loguru import logger
-from inference.core.interfaces.camera.entities import VideoFrameProducer, VideoFrame
+from inference.core.interfaces.camera.entities import VideoFrame, VideoFrameProducer
 import numpy as np
 from datetime import datetime
-# For type hinting if needed
-from inference.core.entities.responses.inference import InferenceResponse, ObjectDetectionPrediction
 from inference.core.interfaces.stream.entities import ModelConfig
 from inference.core.interfaces.camera.video_source import BufferConsumptionStrategy
 from inference.models.utils import get_model
+from app.utils.gstreamer_utils import create_and_setup_gstreamer_frame_producer
 
 # Define PREDICTIONS_QUEUE_SIZE
 PREDICTIONS_QUEUE_SIZE = 100  # Default size, adjust as needed
@@ -35,6 +34,23 @@ settings = get_settings()
 # Create FPS counter instance
 fps_counter = FPSCounter()
 
+# 尝试导入 VideoFrame，如果 inference 库的结构是这样的话
+# 在实际的 inference 库中，VideoFrame 通常在 inference.core.interfaces.stream.entities 中
+try:
+    from inference.core.interfaces.stream.entities import VideoFrame
+except ImportError:
+    logger.warning(
+        "Could not import VideoFrame from inference.core.interfaces.stream.entities. "
+        "Will rely on duck-typing for frame objects."
+    )
+    VideoFrame = None # Placeholder if import fails, duck-typing will be used
+
+
+# Attempt to import Detections from supervision for SVRPrediction
+try:
+    from supervision import Detections as SVRPrediction
+except ImportError:
+    SVRPrediction = None # If supervision is not installed, SVRPrediction will be None
 
 class AIProcessor:
     """
@@ -93,156 +109,211 @@ class AIProcessor:
         self.inference_pipeline: Optional[InferencePipeline] = None
         self.is_running = False
         self.fps_counter = FPSCounter()
-        # self.thread_pool_executor = concurrent.futures.ThreadPoolExecutor(max_workers=settings.THREAD_POOL_MAX_WORKERS)
         self.main_event_loop = None  # Will be captured in start()
         logger.info("AIProcessor.__init__: Initialization complete.")
 
     def _predictions_to_dict(self, predictions_input: Any) -> Dict[str, Any]:
         """
-        Converts predictions from various Roboflow types to a serializable dictionary.
-        Handles InferenceResponse and potentially other formats if predictions_input is already a dict.
+        将不同类型的预测结果统一转换为字典列表。
+        特别处理 Roboflow 的 DetectionPrediction, InstanceSegmentationPrediction 等。
+        也处理直接的字典或字典列表。
         """
-        if isinstance(predictions_input, InferenceResponse):
-            # This is a common case for object detection, classification, etc.
-            # Convert the Pydantic model to a dict.
-            # We need to be careful about custom objects like 'image' or 'parent_id' if they exist
-            # and are not directly serializable.
+        if predictions_input is None:
+            return {"predictions": []}
 
-            # Create a base dictionary
-            response_dict = {
-                "time": predictions_input.time,
-                "is_stub": predictions_input.is_stub,
-                "model_id": predictions_input.model_id,
-                "model_type": predictions_input.model_type,
-                "visualisation_request_id": predictions_input.visualisation_request_id,
-                "latency_report": predictions_input.latency_report,
-                # If available
-                "frame_id": getattr(predictions_input, 'frame_id', None)
-            }
+        # 如果 predictions_input 是 SVRPrediction (Roboflow Supervision)
+        if SVRPrediction is not None and isinstance(predictions_input, SVRPrediction):
+            # SVRPrediction 通常包含 detections,ซึ่งเป็น Supervision Detections object
+            # 我们需要将其转换为更通用的格式
+            # 在这个例子中，我们假设它有一个 .model_dump() 方法或类似的序列化方式
+            # 或者可以访问其内部的 detections 属性
+            try:
+                # 尝试 model_dump()，如果存在 (Pydantic v2)
+                return predictions_input.model_dump(exclude_none=True)
+            except AttributeError:
+                try:
+                    # 尝试 dict() (Pydantic v1 or other custom objects)
+                    return predictions_input.dict(exclude_none=True)
+                except AttributeError:
+                    # 如果是 Supervision Detections 对象
+                    if hasattr(predictions_input, 'xyxy') and hasattr(predictions_input, 'confidence') and hasattr(predictions_input, 'class_id'):
+                        processed_predictions = []
+                        for i in range(len(predictions_input.xyxy)):
+                            pred_item = {
+                                'x_min': float(predictions_input.xyxy[i][0]),
+                                'y_min': float(predictions_input.xyxy[i][1]),
+                                'x_max': float(predictions_input.xyxy[i][2]),
+                                'y_max': float(predictions_input.xyxy[i][3]),
+                                'confidence': float(predictions_input.confidence[i]) if predictions_input.confidence is not None and i < len(predictions_input.confidence) else None,
+                                'class_id': int(predictions_input.class_id[i]) if predictions_input.class_id is not None and i < len(predictions_input.class_id) else None,
+                                'class_name': predictions_input.data.get('class_name', [])[i] if 'class_name' in predictions_input.data and isinstance(predictions_input.data.get('class_name'), list) and i < len(predictions_input.data['class_name']) else None,
+                            }
+                            processed_predictions.append(pred_item)
+                        return {"predictions": processed_predictions, "source": "supervision"}
+                    else:
+                        logger.warning(f"SVRPrediction type unhandled for _predictions_to_dict. Type: {type(predictions_input)}")
+                        return {"predictions": [], "raw_type": str(type(predictions_input))}
 
-            # Handle 'predictions' specifically based on type
-            if hasattr(predictions_input, 'predictions') and predictions_input.predictions is not None:
-                # Common for ObjectDetection, InstanceSegmentation
-                if isinstance(predictions_input.predictions, list):
-                    response_dict["predictions"] = [p.dict(exclude_none=True) if hasattr(
-                        p, 'dict') else p for p in predictions_input.predictions]
-                # For single prediction objects like ClassificationPrediction
-                elif hasattr(predictions_input.predictions, 'dict'):
-                    response_dict["predictions"] = predictions_input.predictions.dict(
-                        exclude_none=True)
-                else:
-                    # Fallback
-                    response_dict["predictions"] = predictions_input.predictions
 
-            # Handle top-level fields like 'image' if they exist and are simple
-            if hasattr(predictions_input, 'image') and predictions_input.image is not None:
-                # e.g. {'width': w, 'height': h}
-                if isinstance(predictions_input.image, dict):
-                    response_dict["image"] = predictions_input.image
-                # elif hasattr(predictions_input.image, 'dict'):
-                #     response_dict["image"] = predictions_input.image.dict()
+        # Roboflow SDK (inference client) 返回的 Prediction 对象 (旧版或特定模型类型)
+        if hasattr(predictions_input, 'json') and callable(predictions_input.json):
+            # 通常 Roboflow 的 Prediction 对象有一个 .json() 方法可以返回字典
+            # 或者 .dict() 方法
+            try:
+                data = predictions_input.json() #  {'predictions': [...], 'image': {'width': ..., 'height': ...}}
+                # 我们只需要 'predictions' 部分，如果回调的期望是这样的话
+                # 或者返回整个 data，让回调处理
+                if isinstance(data, dict) and "predictions" in data:
+                     # 确保每个 prediction 也是字典
+                    if isinstance(data["predictions"], list):
+                        return {"predictions": [p if isinstance(p, dict) else (p.dict() if hasattr(p, 'dict') else vars(p)) for p in data["predictions"]]}
+                    else: # 如果 data["predictions"] 不是列表，尝试转换
+                        logger.warning(f"predictions_input.json()['predictions'] is not a list. Type: {type(data['predictions'])}")
+                        return {"predictions": [data["predictions"].dict() if hasattr(data["predictions"], 'dict') else vars(data["predictions"])]}
 
-            # Add other known serializable fields if they exist
-            for key in ['confidence', 'parent_id', 'ground_truth_image_id', 'visualisation']:
-                if hasattr(predictions_input, key):
-                    value = getattr(predictions_input, key)
-                    if value is not None:
-                        response_dict[key] = value
+                return data #  返回整个JSON结构
+            except Exception as e:
+                logger.error(f"Error calling .json() on prediction object: {e}", exc_info=True)
+                # Fallback to vars or simple dict if .json() fails or not as expected
+                if hasattr(predictions_input, 'predictions'):
+                     return {"predictions": [p if isinstance(p, dict) else (p.dict() if hasattr(p, 'dict') else vars(p)) for p in predictions_input.predictions]}
+                return {"predictions": [vars(p) for p in predictions_input] if isinstance(predictions_input, list) else [vars(predictions_input)]}
 
-            return response_dict
 
-        elif isinstance(predictions_input, dict):
-            # If it's already a dict, assume it's serializable or handle specific known structures
-            # This could be from a workflow that outputs a dict.
-            logger.debug(
-                f"AIProcessor._predictions_to_dict: Input is already a dict: {type(predictions_input)}")
+        # 如果已经是字典，直接返回 (假设它符合期望的结构)
+        if isinstance(predictions_input, dict):
+            if "predictions" not in predictions_input: # 包装一下
+                return {"predictions": [predictions_input]}
             return predictions_input
-        else:
-            logger.warning(
-                f"AIProcessor._predictions_to_dict: Unhandled prediction type: {type(predictions_input)}. Returning as is.")
-            return {"raw_predictions": predictions_input}
 
-    def _on_prediction(self, predictions: Any, image_np: np.ndarray) -> None:
-        """
-        Callback executed by InferencePipeline when new predictions are available.
-        This method is called from a thread managed by InferencePipeline.
-        It needs to schedule the async on_prediction_callback onto the main asyncio event loop.
-        """
-        # ERROR level is used here to make it highly visible during debugging that this callback is being hit.
-        # Change to INFO or DEBUG in production.
-        logger.error(
-            f"!!!!!!!!!! AIProcessor._on_prediction CALLED by InferencePipeline. Predictions type: {type(predictions)}, Image shape: {image_np.shape} !!!!!!!!!!")
+        # 如果是 Prediction 对象列表 (例如，来自某些批处理或特定回调)
+        if isinstance(predictions_input, list) and all(hasattr(p, 'dict') for p in predictions_input):
+            return {"predictions": [p.dict() for p in predictions_input]}
+        
+        # 如果是普通对象列表，尝试 vars()
+        if isinstance(predictions_input, list):
+            try:
+                return {"predictions": [vars(p) for p in predictions_input]}
+            except TypeError: # vars() argument must have __dict__ attribute
+                 logger.warning(f"Could not convert list of predictions using vars(). List items type: {type(predictions_input[0]) if predictions_input else 'empty list'}")
+                 return {"predictions": []}
 
-        self.fps_counter.tick()
-        current_fps = self.fps_counter.get_fps()
-        if current_fps is not None:
-            logger.debug(f"AI Estimated FPS: {current_fps:.2f}")
 
-        if not self.on_prediction_callback:
-            logger.warning(
-                "AIProcessor._on_prediction: on_prediction_callback is None. Predictions will not be handled.")
-            return
-
-        if not self.main_event_loop:
-            logger.error(
-                "AIProcessor._on_prediction: Main asyncio event loop not captured. Cannot schedule callback.")
-            return
-
+        # 最后尝试，如果它是一个单一的对象，用 vars()
         try:
-            # Convert predictions to a serializable dictionary
+            return {"predictions": [vars(predictions_input)]}
+        except TypeError:
+            logger.error(f"Unhandled prediction input type for _predictions_to_dict: {type(predictions_input)}")
+            return {"predictions": [], "error": "Unknown prediction type"}
+
+    def _on_prediction(self, predictions: Any, video_frame_from_pipeline: Any) -> None:
+        """
+        当从 InferencePipeline 接收到新的预测结果时调用的回调函数。
+        注意：此函数在 InferencePipeline 的内部线程中执行。
+        `video_frame_from_pipeline` 预期是 `inference.core.interfaces.stream.entities.VideoFrame` 类型或具有相似属性的对象。
+        """
+        logger.debug(f"AIProcessor._on_prediction: Received predictions type: {type(predictions)}, frame data type: {type(video_frame_from_pipeline)}")
+        try:
+            image_np: Optional[np.ndarray] = None
+            frame_id: Any = "N/A"
+            timestamp: Any = datetime.now() # Default timestamp
+            image_shape_for_payload: Optional[Tuple[int, ...]] = None # Use Tuple[int, ...] for shape
+
+            # 检查 video_frame_from_pipeline 是否是 VideoFrame 类型或至少有必要的属性 (Duck Typing)
+            if hasattr(video_frame_from_pipeline, 'image') and \
+               hasattr(video_frame_from_pipeline, 'frame_id') and \
+               hasattr(video_frame_from_pipeline, 'frame_timestamp'):
+
+                potential_image = getattr(video_frame_from_pipeline, 'image')
+                if isinstance(potential_image, np.ndarray):
+                    image_np = potential_image
+                    if image_np is None: # 额外检查，尽管 isinstance 已经暗示了
+                        logger.error("AIProcessor._on_prediction: potential_image is np.ndarray but resolved to None unexpectedly.")
+                        return
+
+                    frame_id = getattr(video_frame_from_pipeline, 'frame_id')
+                    # frame_timestamp 可能已经是 datetime 对象，或者需要转换的格式
+                    raw_timestamp = getattr(video_frame_from_pipeline, 'frame_timestamp')
+                    if isinstance(raw_timestamp, datetime):
+                        timestamp = raw_timestamp
+                    elif isinstance(raw_timestamp, (int, float)): # 例如，如果是 Unix 时间戳
+                        try:
+                            timestamp = datetime.fromtimestamp(raw_timestamp)
+                        except Exception as ts_e:
+                            logger.warning(f"Could not convert numeric timestamp {raw_timestamp} to datetime: {ts_e}")
+                            timestamp = datetime.now() # Fallback
+                    else: # 其他类型，尝试保留或 fallback
+                        timestamp = raw_timestamp if raw_timestamp else datetime.now()
+
+
+                    image_shape_for_payload = image_np.shape # image_np 已确认是 ndarray
+                    logger.info(
+                        f"AIProcessor._on_prediction (from VideoFrame-like object): Predictions type: {type(predictions)}, "
+                        f"Frame ID: {frame_id}, Timestamp: {timestamp}, Image shape: {image_shape_for_payload}"
+                    )
+                else:
+                    logger.error(
+                        f"AIProcessor._on_prediction: video_frame_from_pipeline.image is not a NumPy array. "
+                        f"Actual type: {type(potential_image)}. Frame ID: {getattr(video_frame_from_pipeline, 'frame_id', 'N/A')}"
+                    )
+                    # image_np 保持为 None
+                    image_np = None # 显式设置为 None
+            elif isinstance(video_frame_from_pipeline, np.ndarray): # 如果直接是 numpy array (不太可能，但作为后备)
+                image_np = video_frame_from_pipeline
+                if image_np is None: # 额外检查
+                    logger.error("AIProcessor._on_prediction: video_frame_from_pipeline is np.ndarray but resolved to None unexpectedly.")
+                    return
+                image_shape_for_payload = image_np.shape # image_np 已确认是 ndarray
+                # frame_id 和 timestamp 需要从其他地方获取，或使用默认值
+                logger.info(
+                    f"AIProcessor._on_prediction (from np.ndarray): Predictions type: {type(predictions)}, "
+                    f"Image shape: {image_shape_for_payload}"
+                )
+            else:
+                logger.error(
+                    f"AIProcessor._on_prediction: video_frame_from_pipeline (type: {type(video_frame_from_pipeline)}) "
+                    f"is not a valid VideoFrame object or NumPy array."
+                )
+                return
+
+            if image_np is None:
+                logger.error("AIProcessor._on_prediction: Could not extract valid image_np from received frame data. Predictions cannot be processed for this frame.")
+                return
+
             predictions_dict = self._predictions_to_dict(predictions)
 
-            frame_id_val = getattr(image_np, 'frame_id',
-                                   getattr(predictions, 'frame_id', None))
-            frame_timestamp_val = None
+            # 新增：详细记录 predictions_dict 的内容
+            try:
+                logger.info(f"AIProcessor._on_prediction: Predictions content: {json.dumps(predictions_dict, indent=2, default=str)}")
+            except Exception as e_json_dump:
+                logger.error(f"AIProcessor._on_prediction: Failed to dump predictions_dict to JSON for logging: {e_json_dump}. Raw dict: {predictions_dict}")
 
-            if self.frame_producer:
-                if hasattr(self.frame_producer, '_last_read_video_frame') and self.frame_producer._last_read_video_frame:
-                    if frame_id_val is None and hasattr(self.frame_producer._last_read_video_frame, 'frame_id'):
-                        frame_id_val = self.frame_producer._last_read_video_frame.frame_id
-                    if hasattr(self.frame_producer._last_read_video_frame, 'frame_timestamp'):
-                        frame_timestamp_val = self.frame_producer._last_read_video_frame.frame_timestamp
+            if self.main_event_loop and self.on_prediction_callback:
+                frame_info = {
+                    "frame_id": frame_id,
+                    "timestamp": timestamp, # 传递 datetime 对象，回调函数中再转为字符串（如果需要）
+                    "image_shape": image_shape_for_payload
+                }
+                logger.debug(f"AIProcessor._on_prediction: Preparing to schedule on_prediction_callback for frame ID {frame_id}. Loop running: {self.main_event_loop.is_running()}") # 新增日志
 
-            if frame_id_val is None:
-                logger.warning(
-                    "AIProcessor._on_prediction: Frame ID not found on image_np or producer. Using FPSCounter timestamp count as fallback ID.")
-                frame_id_val = len(self.fps_counter.timestamps)
+                # 将协程提交到主事件循环
+                future = asyncio.run_coroutine_threadsafe(
+                    self.on_prediction_callback(predictions_dict, frame_info), self.main_event_loop)
+                logger.info( # 修改为INFO级别，确保可见
+                    f"AIProcessor._on_prediction: SUBMITTED/QUEUED on_prediction_callback for frame ID {frame_id}. Future state: {future._state if hasattr(future, '_state') else 'N/A'}")
+            else:
+                if not self.main_event_loop:
+                    logger.warning("AIProcessor._on_prediction: Event loop not available for scheduling callback.")
+                if not self.on_prediction_callback:
+                    logger.warning("AIProcessor._on_prediction: on_prediction_callback not set.")
 
-            frame_info_for_callback = {
-                "frame_id": frame_id_val,
-                "frame_timestamp": frame_timestamp_val.isoformat() if frame_timestamp_val else None,
-                "image_shape": image_np.shape,
-                "estimated_fps": current_fps,
-                "source_id": self.video_source_id
-            }
-            logger.info(
-                f"AIProcessor._on_prediction: Preparing to schedule callback for Frame ID {frame_id_val} with predictions: {type(predictions_dict)}, frame_info: {frame_info_for_callback}")
-
-            # Schedule the asynchronous on_prediction_callback to be run on the main event loop
-            # self.on_prediction_callback is expected to be an async function.
-            future = asyncio.run_coroutine_threadsafe(
-                self.on_prediction_callback(
-                    predictions_dict, frame_info_for_callback),
-                self.main_event_loop
-            )
-
-            # Optional: Add a callback to the future to handle exceptions from the scheduled coroutine
-            def _handle_future_result(f):
-                try:
-                    f.result()  # Raise exception if one occurred in the coroutine
-                    logger.info(
-                        f"AIProcessor._on_prediction: Successfully executed on_prediction_callback for Frame ID {frame_id_val}.")
-                except Exception as e_callback:
-                    logger.error(
-                        f"AIProcessor._on_prediction: Error during on_prediction_callback execution for Frame ID {frame_id_val}: {e_callback}", exc_info=True)
-
-            future.add_done_callback(_handle_future_result)
-            logger.debug(
-                f"AIProcessor._on_prediction: on_prediction_callback scheduled for Frame ID {frame_id_val}.")
-
+        except AttributeError as e:
+            logger.error(
+                f"AIProcessor._on_prediction: AttributeError: {e}. Predictions type: {type(predictions)}, "
+                f"Received frame data type: {type(video_frame_from_pipeline)}", exc_info=True)
         except Exception as e:
             logger.error(
-                f"AIProcessor._on_prediction: Error processing prediction or scheduling callback: {e}", exc_info=True)
+                f"AIProcessor._on_prediction: Error processing prediction: {e}", exc_info=True)
 
     async def start(self):
         """启动 AI 处理流程"""
@@ -257,15 +328,26 @@ class AIProcessor:
             logger.info(
                 f"AIProcessor.start(): Captured main event loop: {self.main_event_loop}")
 
-            video_reference_for_pipeline: Any  # Define type for clarity
-            if self.frame_producer:  # This check should satisfy the linter for subsequent accesses
+            # video_reference_for_pipeline: Any # Define type for clarity - 不再直接使用此变量传递给新版 pipeline
+            video_source: Optional[GStreamerVideoSource] = None # Initialize video_source
+
+            if self.frame_producer:
+                # 确保 self.frame_producer 是 GStreamerFrameProducer 的实例
+                if not isinstance(self.frame_producer, GStreamerFrameProducer):
+                    logger.error(
+                        "AIProcessor.start(): CRITICAL - self.frame_producer is not an instance of GStreamerFrameProducer. "
+                        f"Actual type: {type(self.frame_producer)}. Cannot start inference with frame producer."
+                    )
+                    raise ValueError(
+                        "frame_producer must be an instance of GStreamerFrameProducer if provided to AIProcessor for GStreamerVideoSource."
+                    )
+
                 logger.info(
                     "AIProcessor.start(): Using provided GStreamerFrameProducer.")
-                video_reference_for_pipeline = self.frame_producer
 
                 if hasattr(self.frame_producer, 'start') and callable(self.frame_producer.start):
                     logger.info(
-                        "AIProcessor.start(): Frame producer found. Calling self.frame_producer.start()")
+                        "AIProcessor.start(): Frame producer has start method. Calling self.frame_producer.start()")
                     self.frame_producer.start()
                     producer_running_state = getattr(
                         self.frame_producer, 'running', 'Attribute `running` not found')
@@ -274,32 +356,43 @@ class AIProcessor:
                 else:
                     logger.warning(
                         "AIProcessor.start(): Frame producer does not have a callable 'start' method or is not defined.")
+                
+                # 创建自定义 VideoSource
+                logger.info("AIProcessor.start(): Creating GStreamerVideoSource.")
+                video_source = GStreamerVideoSource(
+                    self.frame_producer, # self.frame_producer is now confirmed to be GStreamerFrameProducer
+                    buffer_consumption_strategy=BufferConsumptionStrategy.EAGER
+                )
+                # 初始化并启动 video_source
+                video_source.start()
+                logger.info("AIProcessor.start(): GStreamerVideoSource started.")
 
             elif self.rtsp_url:
-                logger.info(
-                    f"AIProcessor.start(): Using RTSP URL: {self.rtsp_url}")
-                video_reference_for_pipeline = self.rtsp_url
+                # 当前的 InferencePipeline 初始化方式 (使用 video_sources=[...]) 依赖于 video_source，
+                # 而 video_source 依赖于 self.frame_producer。
+                # 如果要支持直接使用 rtsp_url 而不通过 GStreamerFrameProducer -> GStreamerVideoSource，
+                # 则 InferencePipeline 的初始化逻辑需要改变，例如，通过 InferencePipeline.init(video_reference=self.rtsp_url, ...)
+                # 或者Roboflow SDK提供了其他直接处理URL的方式。
+                # 对于当前的修改，我们假设如果使用 InferencePipeline 的 video_sources 参数，则必须有一个 GStreamerFrameProducer。
+                logger.error(
+                    "AIProcessor.start(): CRITICAL - RTSP URL was provided, but no GStreamerFrameProducer. "
+                    "The current setup requires a GStreamerFrameProducer to create a GStreamerVideoSource for the InferencePipeline. "
+                    "If you intend to use an RTSP URL directly with Roboflow's pipeline without a custom GStreamerFrameProducer, "
+                    "the AIProcessor and InferencePipeline initialization logic needs to be adapted."
+                )
+                raise ValueError(
+                    "AIProcessor configured to use GStreamerVideoSource, which requires a GStreamerFrameProducer. "
+                    "RTSP URL alone is not sufficient for this specific setup path."
+                )
             else:
                 logger.error(
                     "AIProcessor.start(): CRITICAL - Neither frame_producer nor rtsp_url is provided. Cannot start inference.")
                 raise ValueError(
-                    "Either frame_producer or rtsp_url must be provided to AIProcessor.")
+                    "Either a GStreamerFrameProducer (for GStreamerVideoSource) or an RTSP URL (with different pipeline setup) must be provided.")
 
-            # 新增更改 begin --------------------------------------------------
-
-            # 创建自定义 VideoSource
-            logger.info("创建 GStreamerVideoSource")
-            video_source = GStreamerVideoSource(
-                self.frame_producer,
-                buffer_consumption_strategy=BufferConsumptionStrategy.EAGER
-            )
-
-            # 初始化并启动 video_source
-            video_source.start()
-            logger.info("已启动 GStreamerVideoSource")
 
             # 创建推理管道 - 使用视频源和模型
-            logger.info("创建 InferencePipeline")
+            logger.info("AIProcessor.start(): Creating InferencePipeline.")
 
             from inference.core.interfaces.stream.model_handlers.roboflow_models import default_process_frame
             from functools import partial
@@ -345,6 +438,10 @@ class AIProcessor:
             )
             '''
             # 创建管道
+            if video_source is None:
+                logger.error("AIProcessor.start(): CRITICAL - video_source was not created. This indicates an issue with frame_producer setup or logic flow.")
+                raise ValueError("Failed to initialize video_source for InferencePipeline. A GStreamerFrameProducer is required for this path.")
+
             self.inference_pipeline = InferencePipeline(
                 on_video_frame=on_video_frame,
                 video_sources=[video_source],  # 直接传递我们的自定义视频源
@@ -356,14 +453,18 @@ class AIProcessor:
             # 新增更改 end --------------------------------------------------
             logger.info("AIProcessor.start(): InferencePipeline initialized.")
             logger.info(
-                f"AIProcessor.start(): Pipeline video_reference type: {type(video_reference_for_pipeline)}")
+                f"AIProcessor.start(): Pipeline video_reference type: {type(video_source)}")
 
             # 启动推理管道
             logger.info(
                 "AIProcessor.start(): Calling self.inference_pipeline.start()")
-            self.inference_pipeline.start()  # This is typically non-blocking
-            logger.info(
-                "AIProcessor.start(): self.inference_pipeline.start() called.")
+            if self.inference_pipeline:
+                self.inference_pipeline.start(use_main_thread=False)  # 修改这里！确保在独立线程中分发
+                logger.info(
+                    "AIProcessor.start(): self.inference_pipeline.start(use_main_thread=False) called.")
+            else:
+                logger.error("AIProcessor.start(): self.inference_pipeline is None after initialization attempt, cannot start pipeline.")
+                raise ValueError("InferencePipeline failed to initialize properly and is None.")
 
             self.is_running = True
             # Keep processor alive, was correctly kept
@@ -399,10 +500,19 @@ class AIProcessor:
             if self.inference_pipeline:
                 # 停止推理管道
                 self.inference_pipeline.stop()
+                logger.info("AIProcessor.stop(): InferencePipeline.stop() called.")
 
             # 如果使用GStreamerFrameProducer，停止它
             if self.frame_producer:
-                self.frame_producer.release()
+                if hasattr(self.frame_producer, 'release') and callable(self.frame_producer.release):
+                    self.frame_producer.release()
+                    logger.info("AIProcessor.stop(): Frame producer released.")
+                elif hasattr(self.frame_producer, 'stop') and callable(self.frame_producer.stop): # Fallback, if 'stop' is the method
+                    self.frame_producer.stop()
+                    logger.info("AIProcessor.stop(): Frame producer stopped.")
+                else:
+                    logger.warning("AIProcessor.stop(): Frame producer does not have a recognized release or stop method.")
+
 
             self.inference_pipeline = None
             self.is_running = False
@@ -416,64 +526,10 @@ class AIProcessor:
 
 async def example_prediction_handler(predictions_data: Dict[str, Any], frame_info: Dict[str, Any]) -> None:
     """示例回调函数，用于处理预测结果。"""
-    frame_id = frame_info.get('frame_id', 'N/A')
-    timestamp = frame_info.get('timestamp', 'N/A')
     logger.info(
-        f"[示例回调] 收到预测! Frame ID: {frame_id}, Timestamp: {timestamp}, "
-        f"Predictions: {json.dumps(predictions_data, indent=2)}"
+        f"[示例回调] 收到预测! Frame ID: {frame_info.get('frame_id', 'N/A')}, Timestamp: {frame_info.get('timestamp', 'N/A')}, "
+        f"Predictions Data Type: {type(predictions_data)}, Predictions: {predictions_data}"
     )
     # 在这里，你可以添加将结果发送到 WebSocket 或其他地方的逻辑
     await asyncio.sleep(0.01)  # 模拟异步IO操作
 
-
-if __name__ == "__main__":
-    import sys
-    import gi
-    from app.utils.gstreamer_utils import create_and_setup_gstreamer_frame_producer
-    import numpy as np
-    import queue
-
-    # 确保GStreamer已初始化
-    gi.require_version('Gst', '1.0')
-    gi.require_version('GstApp', '1.0')
-    Gst.init(None)
-
-    async def main():
-        # 设置测试GStreamer管道
-        Gst.init(None)
-        pipeline_str = (
-            "videotestsrc is-live=true ! video/x-raw,format=BGR,width=640,height=480,framerate=10/1 ! " +
-            "appsink name=test_sink emit-signals=true max-buffers=1 drop=true sync=false"
-        )
-        pipeline = Gst.parse_launch(pipeline_str)
-        appsink = pipeline.get_by_name("test_sink")
-
-        # 创建GStreamerFrameProducer
-        frame_producer, frame_queue = create_and_setup_gstreamer_frame_producer(
-            rtsp_server_appsink=appsink,
-            fps=10.0,
-            width=640,
-            height=480
-        )
-
-        # 创建AIProcessor
-        processor = AIProcessor(
-            model_id=settings.ROBOFLOW_MODEL_ID,
-            on_prediction_callback=example_prediction_handler,
-            api_key=settings.ROBOFLOW_API_KEY,
-            frame_producer=frame_producer
-        )
-
-        # 启动GStreamer管道
-        pipeline.set_state(Gst.State.PLAYING)
-
-        try:
-            await processor.start()
-            # 运行60秒进行测试
-            await asyncio.sleep(60)
-        finally:
-            await processor.stop()
-            # 停止GStreamer管道
-            pipeline.set_state(Gst.State.NULL)
-
-    # asyncio.run(main())  # 注释掉以防止直接运行

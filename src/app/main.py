@@ -201,37 +201,32 @@ async def handle_ai_prediction(predictions_data: Dict[str, Any], frame_info: Dic
     处理 AIProcessor 预测结果的回调函数。
     将AI检测结果记录并通过WebSocket发送给所有连接的客户端。
     """
-    logger.error(
-        "!!!!!!!!!! handle_ai_prediction CALLED !!!!!!!!!!")  # 强制日志，确认函数调用
     try:
+        logger.info(
+            "!!!!!!!!!! handle_ai_prediction CALLED (inside try) !!!!!!!!!!")
         frame_id = frame_info.get("frame_id", "N/A")
         timestamp = frame_info.get("timestamp", "N/A")
 
         # 更详细地记录接收到的数据
         logger.info(
             f"主回调 handle_ai_prediction: 收到AI预测结果 (Frame ID: {frame_id}, Timestamp: {timestamp}), "
-            f"Predictions: {'[]' if not predictions_data else '有数据'}"
+            f"Predictions: {'[没有预测结果]' if not predictions_data or not predictions_data.get('predictions') else '有预测结果'}"
         )
         try:
-            # 尝试将 predictions_data 和 frame_info 序列化为 JSON 字符串进行记录
-            # 使用 copy.deepcopy 来避免修改原始数据，特别是如果它们是可变类型且后续仍需使用
             predictions_data_log = copy.deepcopy(predictions_data)
             frame_info_log = copy.deepcopy(frame_info)
 
-            # 对于 datetime 对象，需要特殊处理才能 JSON 序列化
             if isinstance(frame_info_log.get("timestamp"), datetime):
                 frame_info_log["timestamp"] = frame_info_log["timestamp"].isoformat()
 
-            # 直接记录原始 frame_info
             logger.info(f"  Raw Frame Info: {frame_info_log}")
             logger.info(
                 f"  Raw Predictions Data Type: {type(predictions_data_log)}")
-            # 直接记录原始 predictions_data
-            logger.info(f"  Raw Predictions Data: {predictions_data_log}")
 
-            # # 下面这两行可以帮助查看详细的JSON结构，如果直接打印不清晰
-            # logger.info(f"  Frame Info (JSON): {json.dumps(frame_info_log, indent=2, default=str)}")
-            # logger.info(f"  Predictions Data (JSON): {json.dumps(predictions_data_log, indent=2, default=str)}")
+            try:
+                logger.info(f"  Detailed Predictions Data (JSON): {json.dumps(predictions_data_log, indent=2, default=str)}")
+            except Exception as e_json_dump_main:
+                logger.error(f"主回调 handle_ai_prediction: 记录 predictions_data_log 时出错 (JSON dump): {e_json_dump_main}. Raw data: {predictions_data_log}")
 
         except Exception as log_e:
             logger.error(
@@ -241,14 +236,12 @@ async def handle_ai_prediction(predictions_data: Dict[str, Any], frame_info: Dic
         websocket_payload = {
             "frame_id": frame_id,
             "timestamp": str(timestamp),  # 确保时间戳是可序列化的
-            "predictions": predictions_data,
+            "predictions": predictions_data.get("predictions", []), # 确保发送的是 predictions 列表
             "image_shape": frame_info.get("image_shape")
         }
 
-        # # 暂时注释掉WebSocket广播，以隔离问题
-        # await websocket_manager.broadcast_ai_result(websocket_payload)
-        # logger.debug(f"主回调 handle_ai_prediction: 已广播 Frame ID {frame_id} 的AI结果。")
-        logger.warning("主回调 handle_ai_prediction: WebSocket广播已临时禁用。")
+        await websocket_manager.broadcast_ai_result(websocket_payload)
+        logger.debug(f"主回调 handle_ai_prediction: 已广播 Frame ID {frame_id} 的AI结果。")
 
     except Exception as e:
         logger.error(
