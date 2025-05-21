@@ -271,7 +271,7 @@ async def lifespan(app: FastAPI):
     # --- 提前初始化帧队列 ---
     import queue
     # 这个 frame_queue 实例将被 RtspServer 和 GStreamerFrameProducer 共享
-    shared_frame_queue = queue.Queue(maxsize=30)  # 限制队列大小
+    shared_frame_queue = queue.Queue(maxsize=60)  # 限制队列大小
     rtsp_server.frame_queue = shared_frame_queue  # 在服务器启动前设置队列
     logger.info("为RTSP服务器创建并设置了帧队列 (早期初始化)")
     # --- 帧队列初始化完毕 ---

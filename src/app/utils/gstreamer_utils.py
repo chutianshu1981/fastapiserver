@@ -21,7 +21,7 @@ def create_frame_queue() -> queue.Queue:
     Returns:
         Queue对象，用于存储视频帧
     """
-    return queue.Queue(maxsize=30)  # 限制队列大小，防止内存溢出
+    return queue.Queue(maxsize=60)  # 限制队列大小，防止内存溢出
 
 
 def on_new_sample_callback(sink: Gst.Element, frame_queue: queue.Queue) -> Gst.FlowReturn:

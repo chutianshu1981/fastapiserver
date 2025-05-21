@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     RTSP_PATH: str = Field(default="/push", description="RTSP 媒体路径")
     OUTPUT_DIR: Path = Field(default=BASE_DIR / "videos", description="视频输出目录")
     MAX_VIDEO_STORAGE_DAYS: int = Field(default=1, description="视频文件最大存储天数")
+    MAX_FPS_SERVER: int = Field(default=10, description="RTSP 服务器最大帧率")
 
     # Roboflow AI 配置
     ROBOFLOW_API_KEY: str = Field(

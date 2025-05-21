@@ -99,7 +99,8 @@ class GStreamerFrameProducer(VideoFrameProducer):
                 # fps=self._fps, # fps 和 resolution 由 discover_source_properties 提供
                 # measured_fps=None, # 通常由 pipeline 内部或更高级别的逻辑计算
             )
-            # logger.info(f"GStreamerFrameProducer.read_frame(): Created VideoFrame ID: {video_frame.frame_id} with timestamp {video_frame.frame_timestamp.isoformat() if video_frame.frame_timestamp else 'None'}")
+            logger.info(
+                f"GStreamerFrameProducer.read_frame(): Created VideoFrame ID: {video_frame.frame_id} with timestamp {video_frame.frame_timestamp.isoformat() if video_frame.frame_timestamp else 'None'}")
             return video_frame
 
         except queue.Empty:
@@ -209,7 +210,6 @@ class GStreamerFrameProducer(VideoFrameProducer):
         return self._last_retrieved_frame_timestamp
 
     def discover_source_properties(self):
-        from inference.core.interfaces.camera.entities import SourceProperties
         return SourceProperties(
             width=self._width,
             height=self._height,
