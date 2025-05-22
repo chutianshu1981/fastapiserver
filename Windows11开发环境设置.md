@@ -231,7 +231,6 @@
 通过遵循这些步骤，你可以利用 Docker 和 WSL 2 在 Windows 11 上创建一个与 Linux 部署环境高度一致且高效的开发环境。
 
 ``` sh
-gst-launch-1.0 playbin uri=rtsp://192.168.31.102:8554/live
 
  eval $(pdm venv activate)    
 
@@ -241,3 +240,28 @@ gst-launch-1.0 playbin uri=rtsp://192.168.31.102:8554/live
 ```
 
 https://inference.roboflow.com/using_inference/inference_pipeline/#migrate-to-changes-introduced-in-v0918
+
+
+## 服务器端直接测试 websocket 连接
+
+``` sh
+npm install -g wscat   # 安装 wscat ，用来测试 websocket 连接的工具
+wscat -c ws://localhost:58000/api/v1/ws # 在服务器上直接测试连接 websocket 端口
+
+# 测试结果数据：
+Connected (press CTRL+C to quit)
+< {"type":"connection_status","status":"connected","message":"成功连接到AI分析服务器","timestamp":1747904370661,"client_id":"9792cead-718f-41de-ae04-c1ba1c25b617"}
+< {"type":"ping","timestamp":1747904370661}
+< {"type":"ai_detection","data":{"frame_id":323,"timestamp":1747904370722,"fps":0.0,"detections":[{"class_name":"go","confidence":0.18677446246147156,"x_center":0.775,"y_center":0.6645833333333333,"width":0.446875,"height":0.6666666666666666}]}}
+< {"type":"ai_detection","data":{"frame_id":325,"timestamp":1747904370927,"fps":0.0,"detections":[{"class_name":"go","confidence":0.18040060997009277,"x_center":0.7796875,"y_center":0.5895833333333333,"width":0.4375,"height":0.8208333333333333}]}}
+< {"type":"ai_detection","data":{"frame_id":326,"timestamp":1747904371028,"fps":0.0,"detections":[{"class_name":"go","confidence":0.6817727088928223,"x_center":0.05703125,"y_center":0.23125,"width":0.1140625,"height":0.4583333333333333},{"class_name":"go","confidence":0.22519731521606445,"x_center":0.78125,"y_center":0.6010416666666667,"width":0.434375,"height":0.7979166666666667}]}}
+< {"type":"ai_detection","data":{"frame_id":328,"timestamp":1747904371220,"fps":0.0,"detections":[{"class_name":"go","confidence":0.6238487362861633,"x_center":0.05859375,"y_center":0.2375,"width":0.1171875,"height":0.4666666666666667},{"class_name":"go","confidence":0.12461790442466736,"x_center":0.78515625,"y_center":0.6,"width":0.4234375,"height":0.8}]}}
+< {"type":"ai_detection","data":{"frame_id":330,"timestamp":1747904371416,"fps":0.0,"detections":[]}}
+< {"type":"ai_detection","data":{"frame_id":332,"timestamp":1747904371609,"fps":0.0,"detections":[{"class_name":"go","confidence":0.12414422631263733,"x_center":0.6078125,"y_center":0.09270833333333334,"width":0.05625,"height":0.18541666666666667}]}}
+< {"type":"ai_detection","data":{"frame_id":333,"timestamp":1747904371718,"fps":0.0,"detections":[{"class_name":"go","confidence":0.408886194229126,"x_center":0.6078125,"y_center":0.10104166666666667,"width":0.05625,"height":0.20208333333333334}]}}
+< {"type":"ai_detection","data":{"frame_id":335,"timestamp":1747904371908,"fps":0.0,"detections":[{"class_name":"go","confidence":0.26044797897338867,"x_center":0.20859375,"y_center":0.46979166666666666,"width":0.4140625,"height":0.8770833333333333}]}}
+< {"type":"ai_detection","data":{"frame_id":337,"timestamp":1747904372089,"fps":0.0,"detections":[]}}
+< {"type":"ai_detection","data":{"frame_id":339,"timestamp":1747904372305,"fps":0.0,"detections":[{"class_name":"go","confidence":0.23472419381141663,"x_center":0.98125,"y_center":0.5291666666666667,"width":0.0375,"height":0.10833333333333334}]}}
+
+```
+

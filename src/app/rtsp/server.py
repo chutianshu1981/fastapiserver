@@ -429,11 +429,12 @@ class RtspServer:
                 else:
                     logger.info("主循环线程已结束。")
 
-            # Detach server from context to release resources
+            logger.info("从GLib上下文中分离RTSP服务器...")
             if self.server:
-                logger.info("从GLib上下文中分离RTSP服务器...")
-                self.server.detach()  # Important for cleanup
-                # self.server = None # Optional: help garbage collection
+                # self.server.detach()  # 注释掉这一行，因为 RTSPServer 对象没有 detach 方法
+                # 通常，当 GLib.MainLoop 停止并且服务器对象不再被引用时，它会被清理。
+                # 如果需要显式从上下文中移除，通常是 self.server.attach(None)，但这可能也不是必需的。
+                logger.info("RTSP服务器对象将被垃圾回收或已从上下文中隐式分离 (通过主循环停止)。")
 
             self._running = False
             logger.info("RTSP 服务器已停止")

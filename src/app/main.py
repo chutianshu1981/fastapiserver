@@ -22,8 +22,11 @@ import asyncio
 import signal
 import os
 import json  # For logging AI predictions
-from typing import Dict, Any, Optional  # For type hinting
+from typing import Dict, Any, Optional, List  # For type hinting
 import copy  # 确保导入 copy 模块
+
+# 新增导入
+from app.api.models import AIDetectionResult, DetectionObject
 
 # 设置环境变量，避免matplotlib错误
 os.environ['MPLBACKEND'] = 'Agg'  # 使用非交互式后端
@@ -199,19 +202,49 @@ async def shutdown_event():
 async def handle_ai_prediction(predictions_data: Dict[str, Any], frame_info: Dict[str, Any]):
     """
     处理 AIProcessor 预测结果的回调函数。
-    将AI检测结果记录并通过WebSocket发送给所有连接的客户端。
+    将AI检测结果转换为 AIDetectionResult 模型并通过WebSocket发送给所有连接的客户端。
     """
+    processed_frame_id_for_error = 0
+    if "frame_info" in locals() and frame_info:
+        processed_frame_id_for_error = frame_info.get("frame_id", 0)
+        if isinstance(processed_frame_id_for_error, str) and processed_frame_id_for_error.isdigit():
+            processed_frame_id_for_error = int(processed_frame_id_for_error)
+        elif not isinstance(processed_frame_id_for_error, int):
+            processed_frame_id_for_error = 0
+
+
     try:
         logger.info(
-            "!!!!!!!!!! handle_ai_prediction CALLED (inside try) !!!!!!!!!!")
-        frame_id = frame_info.get("frame_id", "N/A")
-        timestamp = frame_info.get("timestamp", "N/A")
+            "!!!!!!!!!! handle_ai_prediction CALLED (inside try) !!!!!!!!!!") # Keep this for now
+        
+        raw_frame_id = frame_info.get("frame_id", 0)
+        frame_id: int
+        if isinstance(raw_frame_id, str) and raw_frame_id.isdigit():
+            frame_id = int(raw_frame_id)
+        elif isinstance(raw_frame_id, int):
+            frame_id = raw_frame_id
+        else:
+            logger.warning(f"Invalid frame_id format: {raw_frame_id}. Using default 0.")
+            frame_id = 0
+        
+        processed_frame_id_for_error = frame_id # Update for specific error reporting
 
-        # 更详细地记录接收到的数据
+        raw_timestamp = frame_info.get("timestamp") # This is a datetime object
+        timestamp_ms: int
+        if isinstance(raw_timestamp, datetime):
+            timestamp_ms = int(raw_timestamp.timestamp() * 1000)
+        else:
+            # Fallback if timestamp is not a datetime object as expected
+            logger.warning(f"Invalid timestamp format in frame_info: {raw_timestamp}. Type: {type(raw_timestamp)}. Using current time as fallback.")
+            timestamp_ms = int(datetime.now().timestamp() * 1000)
+
+
         logger.info(
-            f"主回调 handle_ai_prediction: 收到AI预测结果 (Frame ID: {frame_id}, Timestamp: {timestamp}), "
+            f"主回调 handle_ai_prediction: 收到AI预测结果 (Frame ID: {frame_id}, Original Timestamp Obj: {raw_timestamp}), "
             f"Predictions: {'[没有预测结果]' if not predictions_data or not predictions_data.get('predictions') else '有预测结果'}"
         )
+        
+        # Log raw data details (original logging block)
         try:
             predictions_data_log = copy.deepcopy(predictions_data)
             frame_info_log = copy.deepcopy(frame_info)
@@ -232,20 +265,91 @@ async def handle_ai_prediction(predictions_data: Dict[str, Any], frame_info: Dic
             logger.error(
                 f"主回调 handle_ai_prediction: 记录predictions_data或frame_info时出错: {log_e}")
 
-        # 构造发送给客户端的数据
-        websocket_payload = {
-            "frame_id": frame_id,
-            "timestamp": str(timestamp),  # 确保时间戳是可序列化的
-            "predictions": predictions_data.get("predictions", []), # 确保发送的是 predictions 列表
-            "image_shape": frame_info.get("image_shape")
-        }
 
-        await websocket_manager.broadcast_ai_result(websocket_payload)
-        logger.debug(f"主回调 handle_ai_prediction: 已广播 Frame ID {frame_id} 的AI结果。")
+        processed_detections: List[DetectionObject] = []
+        raw_predictions = predictions_data.get("predictions", [])
+        
+        image_shape = frame_info.get("image_shape") # Tuple (height, width, channels)
+        
+        if image_shape and isinstance(image_shape, tuple) and len(image_shape) >= 2:
+            img_height, img_width = image_shape[0], image_shape[1]
+
+            if img_width > 0 and img_height > 0:
+                for pred in raw_predictions:
+                    try:
+                        # Roboflow 通常返回中心点x,y以及宽度和高度
+                        # 直接使用这些值，并确保它们是浮点数
+                        x_center_abs_raw = pred.get('x')
+                        y_center_abs_raw = pred.get('y')
+                        obj_width_abs_raw = pred.get('width')
+                        obj_height_abs_raw = pred.get('height')
+                        confidence_raw = pred.get('confidence')
+                        # Roboflow 返回 'class' 而不是 'class_name'
+                        class_name_raw = pred.get('class') 
+
+                        if None in [x_center_abs_raw, y_center_abs_raw, obj_width_abs_raw, obj_height_abs_raw, confidence_raw, class_name_raw]:
+                            logger.warning(f"Skipping prediction due to missing core fields (x,y,width,height,confidence,class): {pred}")
+                            continue
+
+                        x_center_abs = float(x_center_abs_raw)
+                        y_center_abs = float(y_center_abs_raw)
+                        obj_width_abs = float(obj_width_abs_raw)
+                        obj_height_abs = float(obj_height_abs_raw)
+                        
+                        detection_obj = DetectionObject(
+                            class_name=str(class_name_raw),
+                            confidence=float(confidence_raw),
+                            x_center=x_center_abs / img_width,
+                            y_center=y_center_abs / img_height,
+                            width=obj_width_abs / img_width,
+                            height=obj_height_abs / img_height,
+                        )
+                        processed_detections.append(detection_obj)
+                    except (ValueError, TypeError) as e_obj_conversion:
+                        logger.error(f"Error converting prediction data to float/str: {pred}. Error: {e_obj_conversion}", exc_info=True)
+                    except Exception as e_obj_generic:
+                        logger.error(f"Error processing individual prediction object: {pred}. Error: {e_obj_generic}", exc_info=True)
+            else:
+                logger.warning(f"Image width or height is zero ({img_width}x{img_height}). Cannot calculate relative coordinates.")
+        else:
+            logger.warning(f"Image shape not available or invalid in frame_info: {image_shape}. Type: {type(image_shape)}. Cannot calculate relative coordinates for detections.")
+
+        # TODO: 获取实际的FPS值。目前使用占位符 0.0。
+        # 这可能需要修改 AIProcessor 将FPS数据传递给回调函数，
+        # 例如，通过 frame_info 字典传递 self.fps_counter.get_fps() 的结果。
+        current_fps = frame_info.get("fps", 0.0) # Attempt to get from frame_info, fallback to 0.0
+
+        ai_result_payload = AIDetectionResult(
+            frame_id=frame_id,
+            timestamp=timestamp_ms,
+            fps=float(current_fps), 
+            detections=processed_detections,
+            error=None 
+        )
+        
+        await websocket_manager.broadcast_ai_result(ai_result_payload.model_dump(exclude_none=True))
+        logger.debug(f"主回调 handle_ai_prediction: 已广播 Frame ID {frame_id} 的AI结果 (AIDetectionResult model).")
 
     except Exception as e:
         logger.error(
             f"主回调 handle_ai_prediction 处理AI预测结果错误: {e}", exc_info=True)
+        try:
+            # Ensure timestamp_ms for error payload is defined
+            error_timestamp_ms = int(datetime.now().timestamp() * 1000)
+            if 'timestamp_ms' in locals() and isinstance(timestamp_ms, int): # Use specific if available
+                 error_timestamp_ms = timestamp_ms
+            
+            error_payload = AIDetectionResult(
+                frame_id=processed_frame_id_for_error,
+                timestamp=error_timestamp_ms,
+                fps=0.0, # FPS likely unknown or irrelevant in error case
+                detections=[],
+                error=str(e)
+            )
+            await websocket_manager.broadcast_ai_result(error_payload.model_dump(exclude_none=True))
+            logger.info(f"主回调 handle_ai_prediction: 已广播错误报告 Frame ID {processed_frame_id_for_error}.")
+        except Exception as e_report:
+            logger.error(f"主回调 handle_ai_prediction: 广播错误报告失败: {e_report}")
 
 
 @asynccontextmanager
