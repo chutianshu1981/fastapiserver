@@ -265,3 +265,5 @@ Connected (press CTRL+C to quit)
 
 ```
 
+nc: 5
+names: ['2', '3', '4', 'go', 'stop']
