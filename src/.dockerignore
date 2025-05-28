@@ -1,0 +1,84 @@
+# 开发和构建产物
+.venv/
+.pdm-build/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# 开发配置和工具
+.python-version
+.pdm-python
+.env
+.env.*
+env.template
+*.env
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 测试文件和脚本
+tests/
+test_*.py
+*_test.py
+testing/
+
+# 文档
+*.md
+docs/
+*.rst
+*.txt
+
+# 日志和临时文件
+logs/
+*.log
+tmp/
+temp/
+*.tmp
+
+# 系统文件
+.DS_Store
+Thumbs.db
+*.bak
+*.orig
+
+# Docker 相关（避免嵌套）
+Dockerfile*
+.dockerignore
+docker/
+
+# Git 相关
+.git/
+.gitignore
+.gitattributes
+
+# 视频文件（除非需要作为测试数据）
+#videos/
+
+# 脚本文件（除非运行时需要）
+#scripts/
+
+# 特定的测试/开发文件
+test_websocket_client.py
+test_rtsp_server.py
+test_gst.py
+rtspserver.py
+app_next_level.py
+
+# 如果有 AI 模型文件，根据需要选择性包含或排除
+# models/
+# *.pth
+# *.onnx
+# *.pkl 

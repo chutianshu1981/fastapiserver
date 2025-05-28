@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  rtsp-ai-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rtsp-ai-server:latest
+    container_name: rtsp-ai-container
+    restart: unless-stopped
+
+    ports:
+      - "58000:58000" # FastAPI HTTP 端口
+      - "8554:8554" # RTSP 端口
+
+    environment:
+      # 应用配置
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      # GStreamer 配置
+      - GST_DEBUG=2
+      # AI 模型配置（根据需要调整）
+      - ROBOFLOW_API_KEY=${ROBOFLOW_API_KEY}
+      - MODEL_ID=${MODEL_ID}
+      #- MODEL_VERSION=${MODEL_VERSION:-1}
+      # 网络配置
+      - RTSP_PORT=8554
+      - RTSP_PATH=/push
+      - WS_HOST=0.0.0.0
+      - WS_PORT=58000
+
+    volumes:
+      # 日志持久化
+      - ./logs:/app/logs
+      # 数据持久化
+      - ./data:/app/data
+
+    # 健康检查  
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:58000/" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # 网络模式
+    network_mode: bridge
+
+    # 资源限制（根据需要调整）
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+          cpus: '8.0'
+        reservations:
+          memory: 4G
+          cpus: '2.0'
+
+    # 安全配置
+    security_opt:
+      - no-new-privileges:true
+    # 如果需要访问宿主机网络设备（如摄像头），可以添加：
+    # devices:
+    #   - /dev/video0:/dev/video0
+
+    # 如果需要特权模式（通常不推荐）：
+    # privileged: true
+
+    # 可选：添加网络配置
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
