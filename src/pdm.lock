@@ -5,7 +5,7 @@
 groups = ["default", "all-dev", "dev", "docs"]
 strategy = []
 lock_version = "4.5.0"
-content_hash = "sha256:cc94ed4238c802df4d14194406881c07b6ad037adee6223c53ae54a2e1d3cc64"
+content_hash = "sha256:92a35c253e20876c96e7aa2dca72434ebde0bea3f26f137eab1c98dd507dbba1"
 
 [[metadata.targets]]
 requires_python = ">=3.12,<3.13"
@@ -2123,6 +2123,17 @@ files = [
 ]
 
 [[package]]
+name = "pycairo"
+version = "1.28.0"
+summary = ""
+files = [
+    {file = "pycairo-1.28.0-cp312-cp312-win32.whl", hash = "sha256:c00cfbb7f30eb7ca1d48886712932e2d91e8835a8496f4e423878296ceba573e"},
+    {file = "pycairo-1.28.0-cp312-cp312-win_amd64.whl", hash = "sha256:d50d190f5033992b55050b9f337ee42a45c3568445d5e5d7987bab96c278d8a6"},
+    {file = "pycairo-1.28.0-cp312-cp312-win_arm64.whl", hash = "sha256:957e0340ee1c279d197d4f7cfa96f6d8b48e453eec711fca999748d752468ff4"},
+    {file = "pycairo-1.28.0.tar.gz", hash = "sha256:26ec5c6126781eb167089a123919f87baa2740da2cca9098be8b3a6b91cc5fbc"},
+]
+
+[[package]]
 name = "pycocotools"
 version = "2.0.8"
 summary = ""
@@ -2252,6 +2263,17 @@ summary = ""
 files = [
     {file = "pygments-2.19.1-py3-none-any.whl", hash = "sha256:9ea1544ad55cecf4b8242fab6dd35a93bbce657034b0611ee383099054ab6d8c"},
     {file = "pygments-2.19.1.tar.gz", hash = "sha256:61c16d2a8576dc0649d9f39e089b5f02bcd27fba10d8fb4dcc28173f7a45151f"},
+]
+
+[[package]]
+name = "pygobject"
+version = "3.50.1"
+summary = ""
+dependencies = [
+    "pycairo",
+]
+files = [
+    {file = "pygobject-3.50.1.tar.gz", hash = "sha256:a4df4e7adef7f4f01685a763d138eac9396585bfc68a7d31bbe4fbca2de0d7cb"},
 ]
 
 [[package]]

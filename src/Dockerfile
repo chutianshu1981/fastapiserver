@@ -18,6 +18,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2-dev \
     python3-dev \
     gir1.2-gtk-3.0 \
+    # GStreamer core and plugins base for GIR data needed by PyGObject at build/validation time
+    gstreamer1.0-plugins-base \
+    gir1.2-gstreamer-1.0 \
+    gir1.2-gst-plugins-base-1.0 \
     # Build tools that PyGObject might need
     meson \
     ninja-build \
@@ -62,11 +66,9 @@ RUN pdm config python.use_venv true && \
 # 设置 PKG_CONFIG_PATH 确保能找到 .pc 文件
 # Meson (used by PyGObject) should automatically pick up .pc files from standard locations
 # like /usr/lib/x86_64-linux-gnu/pkgconfig and /usr/share/pkgconfig.
-# Explicitly setting PKG_CONFIG_PATH can sometimes help if files are in non-standard locations
-# or to prioritize certain paths. Given we install system deps, they should be in standard paths.
-ENV PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}
+ENV PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
 
-# 安装依赖 (这将创建 venv, 生成新的 pdm.lock, 并同步依赖包括 PyGObject)
+# 安装依赖 (这将创建 venv, 在 Docker 环境中生成新的 pdm.lock, 并同步依赖)
 RUN pdm install --prod --no-editable --no-self
 
 # 验证 PyGObject 和 GStreamer 在 builder 阶段的虚拟环境中是否可用
@@ -126,7 +128,8 @@ RUN groupadd -r appuser && useradd --no-log-init -r -g appuser appuser && \
     chown -R appuser:appuser /home/appuser /tmp/matplotlib
 
 COPY --from=builder /app_build/.venv $APP_HOME/.venv
-COPY --from=builder /app_build/pdm.lock $APP_HOME/
+COPY --from=builder /app_build/pdm.lock $APP_HOME/pdm.lock
+COPY --from=builder /app_build/pyproject.toml $APP_HOME/pyproject.toml
 
 COPY app/ $APP_HOME/app/
 
