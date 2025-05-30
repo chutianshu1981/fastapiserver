@@ -71,6 +71,27 @@ ENV PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
 # 安装依赖 (这将创建 venv, 在 Docker 环境中生成新的 pdm.lock, 并同步依赖)
 RUN pdm install --prod --no-editable --no-self
 
+# --- 优化：清理虚拟环境 ---
+# 打印原始 .venv 大小和占用空间大的包
+RUN echo "--- Dockerfile: Original .venv size and top packages ---" && \
+    du -sh .venv && \
+    echo "--- Top 20 largest items in .venv/lib/python3.12/site-packages/ ---" && \
+    (du -sh .venv/lib/python3.12/site-packages/* | sort -rh | head -n 20 || echo "Could not list site-packages content details.") && \
+    echo "--- End of original .venv size and top packages ---"
+
+# 清理 .venv
+RUN echo "--- Dockerfile: Cleaning .venv ---" && \
+    find .venv -type d -name "__pycache__" -exec rm -r {} + && \
+    find .venv -type f -name "*.pyc" -delete && \
+    find .venv -type f -name '*.so' -print0 | xargs -0 --no-run-if-empty strip --strip-unneeded && \
+    echo "--- Dockerfile: Finished cleaning .venv ---"
+
+# 打印清理后的 .venv 大小
+RUN echo "--- Dockerfile: Cleaned .venv size ---" && \
+    du -sh .venv && \
+    echo "--- End of cleaned .venv size ---"
+# --- 结束优化 ---
+
 # 验证 PyGObject 和 GStreamer 在 builder 阶段的虚拟环境中是否可用
 RUN . .venv/bin/activate && \
     python -c "import gi; print('[Builder] PyGObject available')" && \
@@ -128,8 +149,6 @@ RUN groupadd -r appuser && useradd --no-log-init -r -g appuser appuser && \
     chown -R appuser:appuser /home/appuser /tmp/matplotlib
 
 COPY --from=builder /app_build/.venv $APP_HOME/.venv
-COPY --from=builder /app_build/pdm.lock $APP_HOME/pdm.lock
-COPY --from=builder /app_build/pyproject.toml $APP_HOME/pyproject.toml
 
 COPY app/ $APP_HOME/app/
 

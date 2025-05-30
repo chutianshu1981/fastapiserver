@@ -392,7 +392,7 @@ async def lifespan(app: FastAPI):
         from app.services.gstreamer_frame_producer import GStreamerFrameProducer
         frame_producer = GStreamerFrameProducer(
             frame_queue=shared_frame_queue,  # 确保使用上面创建的同一个队列实例
-            fps=10.0,  # 假设的帧率
+            fps=5.0,  # 假设的帧率
             width=640,  # 默认宽度
             height=480  # 默认高度
         )

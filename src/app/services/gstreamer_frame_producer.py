@@ -96,8 +96,6 @@ class GStreamerFrameProducer(VideoFrameProducer):
                 frame_id=self.frame_id_counter,
                 frame_timestamp=current_timestamp_dt,
                 source_id=self._source_id
-                # fps=self._fps, # fps 和 resolution 由 discover_source_properties 提供
-                # measured_fps=None, # 通常由 pipeline 内部或更高级别的逻辑计算
             )
             logger.info(
                 f"GStreamerFrameProducer.read_frame(): Created VideoFrame ID: {video_frame.frame_id} with timestamp {video_frame.frame_timestamp.isoformat() if video_frame.frame_timestamp else 'None'}")

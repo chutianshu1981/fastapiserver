@@ -26,7 +26,7 @@ dependencies = [
     # "PyGObject>=3.52.3"                # 通过系统包安装: sudo apt install python3-gi
     "psutil>=7.0.0",
     "slowapi>=0.1.9",
-    "numpy~=2.0.0",                 # 修改以兼容 inference==0.49.1
+    "numpy>=2.0.0",                 # 修改以兼容 inference==0.49.1
     "roboflow>=1.1.63",
     "inference[transformers,sam,clip,grounding-dino,yolo-world,gaze]>=0.49.5",  # Roboflow inference with extras
     "supervision>=0.25.1",           # 用于视觉监控和性能分析

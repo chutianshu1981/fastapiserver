@@ -109,7 +109,7 @@ def on_new_sample_callback(sink: Gst.Element, frame_queue: queue.Queue) -> Gst.F
 
 def create_and_setup_gstreamer_frame_producer(
     rtsp_server_appsink: Gst.Element,
-    fps: float = 10.0,
+    fps: float = 5.0,
     width: int = 640,
     height: int = 480
 ) -> Tuple[GStreamerFrameProducer, queue.Queue]:
