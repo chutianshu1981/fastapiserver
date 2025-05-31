@@ -36,8 +36,7 @@ class Settings(BaseSettings):
     MAX_FPS_SERVER: int = Field(default=10, description="RTSP 服务器最大帧率")
 
     # Roboflow AI 配置
-    ROBOFLOW_API_KEY: str = Field(
-        default="vQBqeX1kgPouPr8aWDd5", description="Roboflow API Key")
+    ROBOFLOW_API_KEY: str = Field(description="Roboflow API Key")
     # coco-dataset-vdnr1/23
     # next-level-i0lpn/3
     ROBOFLOW_MODEL_ID: str = Field(

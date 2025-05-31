@@ -32,7 +32,8 @@ from app.api.models import AIDetectionResult, DetectionObject
 os.environ['MPLBACKEND'] = 'Agg'  # 使用非交互式后端
 # 如果环境变量中没有设置GST_DEBUG，则设置它
 if 'GST_DEBUG' not in os.environ:
-    os.environ['GST_DEBUG'] = 'avdec_h264:5,h264parse:5,rtph264depay:4,rtsp*:4,default:3'
+    #os.environ['GST_DEBUG'] = 'avdec_h264:5,h264parse:5,rtph264depay:4,rtsp*:4,default:3'
+    os.environ["GST_DEBUG"] = "h264parse:3,*:3"
 
 # 打印当前的GStreamer调试设置
 print(f"当前GStreamer调试级别: {os.environ.get('GST_DEBUG', '未设置')}")
