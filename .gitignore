@@ -1,6 +1,7 @@
 # pdm
 src/pdm.lock
-
+# docs备份
+old_docs/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 src/__pycache__/
