@@ -6,7 +6,7 @@ WebSocket 连接管理器
 2. 广播 AI 检测结果到所有连接的客户端
 3. 保持连接活跃检查
 """
-from typing import Dict, List, Set, Any
+from typing import Dict, List, Set, Any, Union
 import json
 import asyncio
 from fastapi import WebSocket, WebSocketDisconnect
@@ -73,12 +73,12 @@ class ConnectionManager:
                 logger.info("Ping任务已取消")
             self.ping_task = None
 
-    async def send_personal_message(self, message: Dict[str, Any], client_id: str):
+    async def send_personal_message(self, message: Union[Dict[str, Any], str], client_id: str):
         """
         发送消息给指定客户端
 
         Args:
-            message: 要发送的消息
+            message: 要发送的消息 (可以是字典或字符串)
             client_id: 客户端标识符
         """
         if client_id in self.active_connections:
@@ -92,12 +92,12 @@ class ConnectionManager:
                 logger.error(f"发送消息给客户端 {client_id} 失败: {e}")
                 await self.disconnect(client_id)
 
-    async def broadcast(self, message: Dict[str, Any]):
+    async def broadcast(self, message: Union[Dict[str, Any], str]):
         """
         广播消息给所有连接的客户端
 
         Args:
-            message: 要广播的消息
+            message: 要广播的消息 (可以是字典或字符串)
         """
         disconnected_clients = []
 
